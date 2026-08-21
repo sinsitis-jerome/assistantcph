@@ -1,0 +1,1313 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Boîte à outils CPH</title>
+<meta name="description" content="Outils pratiques pour conseillers prud'homaux : feuille de vacation avec relevé mensuel, guide pas-à-pas pour présider un BJ ou un BCO, textes de référence et phrases rituelles. Fonctionne hors ligne, aucune donnée envoyée à un serveur.">
+<meta name="theme-color" content="#F3F1EC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14171A" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="./icons/icon-192.png" sizes="192x192" type="image/png">
+<link rel="icon" href="./icons/icon-512.png" sizes="512x512" type="image/png">
+<link rel="apple-touch-icon" href="./icons/icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<style>
+  /* ===================== TOKENS ===================== */
+  :root{
+    --bg:#F3F1EC;
+    --panel:#FFFFFF;
+    --panel-2:#ECE9E3;
+    --text:#1C2024;
+    --text-muted:#6B7178;
+    --text-faint:#9CA1A7;
+    --divider:rgba(0,0,0,0.09);
+
+    --red:#B34D3B;      --red-glow:rgba(179,77,59,0.16);
+    --amber:#A9762E;    --amber-glow:rgba(169,118,46,0.16);
+    --green:#4C7A5C;    --green-glow:rgba(76,122,92,0.16);
+    --blue:#5D7C91;     --blue-glow:rgba(93,124,145,0.14);
+    --pause:#767C82;    --pause-glow:rgba(118,124,130,0.14);
+
+    --accent:#A9762E;
+    --accent-2:#8B5E22;
+    --accent-glow:rgba(169,118,46,0.14);
+
+    --shadow: 0 1px 2px rgba(28,32,36,0.04), 0 6px 20px rgba(28,32,36,0.06);
+
+    --font-display:"Fraunces", Georgia, "Iowan Old Style", serif;
+    --font-body:-apple-system,"SF Pro Rounded","SF Pro Text",ui-rounded,"Segoe UI",Roboto,"Inter",system-ui,sans-serif;
+    --font-mono:"JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+
+    --radius-lg:16px;
+    --radius-md:12px;
+    --radius-sm:10px;
+
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#14171A;
+      --panel:#1B1F23;
+      --panel-2:#20252A;
+      --text:#F2EFE9;
+      --text-muted:#8B9298;
+      --text-faint:#565C62;
+      --divider:rgba(255,255,255,0.07);
+
+      --red:#C0533F;      --red-glow:rgba(192,83,63,0.35);
+      --amber:#C89A4B;    --amber-glow:rgba(200,154,75,0.32);
+      --green:#5F9270;    --green-glow:rgba(95,146,112,0.32);
+      --blue:#7FA0B8;     --blue-glow:rgba(127,160,184,0.28);
+      --pause:#7A828A;    --pause-glow:rgba(122,130,138,0.28);
+
+      --accent:#D9AE5C;
+      --accent-2:#C89A4B;
+      --accent-glow:rgba(217,174,92,0.22);
+
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14171A;
+    --panel:#1B1F23;
+    --panel-2:#20252A;
+    --text:#F2EFE9;
+    --text-muted:#8B9298;
+    --text-faint:#565C62;
+    --divider:rgba(255,255,255,0.07);
+
+    --red:#C0533F;      --red-glow:rgba(192,83,63,0.35);
+    --amber:#C89A4B;    --amber-glow:rgba(200,154,75,0.32);
+    --green:#5F9270;    --green-glow:rgba(95,146,112,0.32);
+    --blue:#7FA0B8;     --blue-glow:rgba(127,160,184,0.28);
+    --pause:#7A828A;    --pause-glow:rgba(122,130,138,0.28);
+
+    --accent:#D9AE5C;
+    --accent-2:#C89A4B;
+    --accent-glow:rgba(217,174,92,0.22);
+
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
+    color-scheme: dark;
+  }
+
+  /* ===================== BASE ===================== */
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--font-body);
+    font-size:16px;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{ animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important; }
+  }
+  h1,h2,h3{ font-family:var(--font-display); font-weight:600; margin:0; text-wrap:balance; }
+  p{ margin:0; }
+  button{ font-family:inherit; }
+  ::selection{ background:var(--accent-glow); }
+  a{ color:var(--accent-2); }
+
+  /* ===================== SHELL ===================== */
+  #app{
+    max-width:480px;
+    margin:0 auto;
+    min-height:100vh;
+    background:var(--bg);
+    display:flex;
+    flex-direction:column;
+    position:relative;
+    box-shadow: var(--shadow);
+  }
+  @media (min-width:520px){
+    body{ padding:24px 0; }
+    #app{ min-height:calc(100vh - 48px); border-radius:20px; overflow:hidden; }
+  }
+
+  .topbar{
+    position:sticky; top:0; z-index:20;
+    display:flex; align-items:center; gap:10px;
+    padding:14px 16px;
+    background:var(--bg);
+    border-bottom:1px solid var(--divider);
+  }
+  .topbar .tb-btn{
+    width:34px; height:34px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--panel-2); border:none; color:var(--text);
+    cursor:pointer; flex:none;
+  }
+  .topbar .tb-btn svg{ width:18px; height:18px; }
+  .topbar h1{ font-size:1.05rem; font-weight:600; flex:1; }
+  .topbar .tb-spacer{ width:34px; flex:none; }
+
+  main{ flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+  .screen{ display:none; padding:16px 16px 40px; animation: screenIn .28s ease; }
+  .screen.active{ display:block; }
+  @keyframes screenIn{ from{ opacity:0; transform:translateY(6px);} to{ opacity:1; transform:translateY(0);} }
+
+  /* ===================== HOME ===================== */
+  .hero{ padding:6px 2px 18px; }
+  .hero .eyebrow{ font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:var(--accent-2); font-weight:600; }
+  .hero h1{ font-size:1.7rem; margin-top:6px; line-height:1.15; }
+  .hero p{ color:var(--text-muted); font-size:.88rem; margin-top:8px; line-height:1.5; }
+
+  .card-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .tool-card{
+    background:var(--panel); border:1px solid var(--divider); border-radius:var(--radius-lg);
+    padding:16px 14px; text-align:left; cursor:pointer; position:relative;
+    display:flex; flex-direction:column; gap:10px; min-height:128px;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .tool-card:active{ transform:scale(0.98); }
+  .tool-card .ic{
+    width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center;
+    background:var(--accent-glow); color:var(--accent-2);
+  }
+  .tool-card .ic svg{ width:20px; height:20px; }
+  .tool-card .t{ font-family:var(--font-display); font-weight:600; font-size:1rem; line-height:1.2; }
+  .tool-card .d{ font-size:.78rem; color:var(--text-muted); line-height:1.4; }
+  .tool-card .badge{ position:absolute; top:12px; right:12px; }
+  .tool-card.wide{ grid-column:1 / -1; flex-direction:row; align-items:center; min-height:auto; }
+  .tool-card.wide .ic{ flex:none; }
+
+  .badge{
+    display:inline-flex; align-items:center; gap:4px;
+    font-size:.66rem; font-weight:600; letter-spacing:.03em; text-transform:uppercase;
+    padding:3px 7px; border-radius:99px;
+  }
+  .badge.amber{ background:var(--amber-glow); color:var(--amber); }
+  .badge.green{ background:var(--green-glow); color:var(--green); }
+  .badge.blue{ background:var(--blue-glow); color:var(--blue); }
+  .badge.pause{ background:var(--pause-glow); color:var(--pause); }
+
+  /* ===================== GENERIC UI ===================== */
+  .section-title{ font-family:var(--font-display); font-size:1.05rem; font-weight:600; margin:22px 0 10px; }
+  .section-title:first-child{ margin-top:0; }
+  .lede{ font-size:.88rem; color:var(--text-muted); line-height:1.55; margin-bottom:14px; }
+
+  .panel{ background:var(--panel); border:1px solid var(--divider); border-radius:var(--radius-lg); padding:14px; }
+  .panel + .panel{ margin-top:12px; }
+  .stat-row{ display:flex; gap:10px; }
+  .stat-box{ flex:1; background:var(--panel-2); border-radius:var(--radius-sm); padding:10px 12px; }
+  .stat-box .n{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:1.15rem; font-weight:600; }
+  .stat-box .l{ font-size:.7rem; color:var(--text-muted); margin-top:2px; }
+
+  .sheet-btn{
+    display:block; width:100%; text-align:center;
+    border:none; border-radius:var(--radius-md); padding:12px 16px;
+    font-size:.92rem; font-weight:600; cursor:pointer;
+    font-family:var(--font-body);
+  }
+  .sheet-btn + .sheet-btn{ margin-top:10px; }
+  .sheet-btn.primary{ background:var(--text); color:var(--bg); }
+  .sheet-btn.ghost{ background:transparent; color:var(--text-muted); border:1px solid var(--divider); }
+  .sheet-btn.danger{ background:var(--red); color:#fff; }
+  .sheet-btn.accent{ background:var(--accent-glow); color:var(--accent-2); }
+  .sheet-btn:disabled{ opacity:.4; cursor:not-allowed; }
+  .sheet-btn.small{ padding:9px 12px; font-size:.82rem; width:auto; display:inline-block; }
+  .btn-row{ display:flex; gap:10px; }
+  .btn-row .sheet-btn{ margin-top:0; }
+
+  .row-click{
+    display:flex; align-items:center; gap:10px; padding:12px 4px;
+    border-bottom:1px solid var(--divider); cursor:pointer;
+  }
+  .row-click:last-child{ border-bottom:none; }
+  .row-click:active{ background:var(--panel-2); }
+  .row-click .rc-main{ flex:1; min-width:0; }
+  .row-click .rc-title{ font-size:.9rem; font-weight:600; }
+  .row-click .rc-sub{ font-size:.76rem; color:var(--text-muted); margin-top:2px; }
+  .row-click .rc-val{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:.86rem; color:var(--text-muted); flex:none; }
+
+  .info-pastille{
+    width:18px; height:18px; border-radius:50%; flex:none;
+    background:var(--text-muted); color:var(--panel);
+    font-size:.66rem; font-weight:700; display:flex; align-items:center; justify-content:center;
+  }
+
+  .chip-row{ display:flex; flex-wrap:wrap; gap:8px; }
+  .chip{
+    padding:8px 13px; border-radius:99px; border:1px solid var(--divider);
+    background:var(--panel-2); font-size:.82rem; color:var(--text); cursor:pointer;
+  }
+  .chip.active{ background:var(--text); color:var(--bg); border-color:var(--text); }
+
+  label.field-label{ display:block; font-size:.76rem; color:var(--text-muted); margin:14px 0 6px; font-weight:600; }
+  label.field-label:first-child{ margin-top:0; }
+  input[type=text], input[type=date], input[type=number], select, textarea{
+    width:100%; background:var(--panel-2); border:1px solid var(--divider); border-radius:var(--radius-sm);
+    padding:10px 12px; font-size:.9rem; color:var(--text); font-family:var(--font-body);
+  }
+  textarea{ resize:vertical; min-height:64px; }
+  input:focus, select:focus, textarea:focus, button:focus-visible, .row-click:focus-visible, .chip:focus-visible{
+    outline:2px solid var(--accent); outline-offset:1px;
+  }
+
+  .quote-block{
+    background:var(--accent-glow); border-left:3px solid var(--accent); border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+    padding:10px 12px; font-size:.86rem; font-weight:600; color:var(--text); margin:10px 0;
+  }
+  .quote-block .copy-mini{ float:right; font-size:.68rem; font-weight:600; color:var(--accent-2); cursor:pointer; margin-left:8px; }
+  .note-block{
+    background:var(--panel-2); border-radius:var(--radius-sm); padding:10px 12px; font-size:.82rem; color:var(--text-muted);
+    line-height:1.55; margin:10px 0; font-style:italic;
+  }
+  .refs-row{ display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .ref-chip{
+    font-family:var(--font-mono); font-size:.7rem; padding:4px 8px; border-radius:6px;
+    background:var(--blue-glow); color:var(--blue); cursor:pointer; border:none;
+  }
+
+  .checklist-item{ display:flex; align-items:flex-start; gap:10px; padding:8px 0; font-size:.88rem; line-height:1.5; }
+  .checklist-item input[type=checkbox]{ margin-top:3px; width:17px; height:17px; accent-color:var(--accent-2); flex:none; }
+  .checklist-item.checked span{ color:var(--text-muted); text-decoration:line-through; text-decoration-color:var(--divider); }
+
+  .step-card{ background:var(--panel); border:1px solid var(--divider); border-radius:var(--radius-lg); padding:16px; margin-bottom:12px; }
+  .step-head{ display:flex; align-items:center; gap:10px; cursor:pointer; }
+  .step-num{
+    width:26px; height:26px; border-radius:50%; background:var(--panel-2); color:var(--text-muted);
+    display:flex; align-items:center; justify-content:center; font-size:.76rem; font-weight:700; flex:none;
+    font-family:var(--font-mono);
+  }
+  .step-card.done .step-num{ background:var(--green-glow); color:var(--green); }
+  .step-head h3{ font-size:.98rem; flex:1; }
+  .step-head .chev{ width:16px; height:16px; color:var(--text-faint); transition:transform .2s ease; flex:none; }
+  .step-card.open .step-head .chev{ transform:rotate(90deg); }
+  .step-body{ display:none; margin-top:12px; padding-top:12px; border-top:1px solid var(--divider); }
+  .step-card.open .step-body{ display:block; }
+  .step-body .subcase{ margin:14px 0; }
+  .step-body .subcase-title{ font-size:.82rem; font-weight:700; margin-bottom:6px; }
+  .progress-track{ height:6px; border-radius:99px; background:var(--panel-2); overflow:hidden; }
+  .progress-fill{ height:100%; background:var(--accent); transition:width .3s ease; border-radius:99px; }
+
+  .attn-pulse{
+    display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--amber);
+    box-shadow:0 0 0 0 var(--amber-glow); animation:pulseAmber 1.8s ease-in-out infinite; margin-right:6px;
+  }
+  @keyframes pulseAmber{ 0%{ box-shadow:0 0 0 0 var(--amber-glow);} 70%{ box-shadow:0 0 0 8px transparent;} 100%{ box-shadow:0 0 0 0 transparent;} }
+
+  .banner{
+    display:flex; gap:10px; align-items:flex-start; padding:12px 14px; border-radius:var(--radius-md);
+    background:var(--amber-glow); color:var(--text); font-size:.82rem; line-height:1.5; margin-bottom:16px;
+  }
+  .banner b{ color:var(--amber); }
+
+  /* ===================== SHEET (bottom modal) ===================== */
+  #sheet-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:40; opacity:0; pointer-events:none; transition:opacity .25s ease;
+  }
+  #sheet-overlay.open{ opacity:1; pointer-events:auto; }
+  #sheet{
+    position:fixed; left:50%; bottom:0; transform:translate(-50%,100%); width:100%; max-width:480px; z-index:41;
+    background:var(--panel); border-radius:20px 20px 0 0; padding:18px 16px 22px; max-height:82vh; overflow-y:auto;
+    transition:transform .3s cubic-bezier(.2,.8,.2,1); box-shadow:0 -8px 30px rgba(0,0,0,0.25);
+  }
+  #sheet-overlay.open #sheet{ transform:translate(-50%,0); }
+  #sheet .sheet-grip{ width:36px; height:4px; border-radius:99px; background:var(--divider); margin:0 auto 14px; }
+  #sheet h2{ font-size:1.05rem; margin-bottom:12px; }
+
+  /* ===================== TOAST ===================== */
+  #toast{
+    position:fixed; left:50%; bottom:24px; transform:translate(-50%,12px); z-index:60;
+    background:var(--text); color:var(--bg); padding:10px 16px; border-radius:99px; font-size:.82rem; font-weight:600;
+    opacity:0; pointer-events:none; transition:opacity .25s ease, transform .25s ease; max-width:88%; text-align:center;
+  }
+  #toast.show{ opacity:1; transform:translate(-50%,0); }
+
+  /* ===================== PRINT ===================== */
+  #print-area{ display:none; }
+  @media print{
+    #app > .topbar, #app > main > .screen, #sheet-overlay{ display:none !important; }
+    #print-area{ display:block !important; }
+    body{ background:#fff; color:#000; }
+    #print-area table{ width:100%; border-collapse:collapse; font-size:12px; }
+    #print-area th, #print-area td{ border:1px solid #999; padding:6px 8px; text-align:left; }
+    #print-area h1{ font-size:18px; } #print-area h2{ font-size:13px; color:#444; font-weight:400; margin-bottom:2px; }
+  }
+
+  .footnote{ font-size:.7rem; color:var(--text-faint); line-height:1.5; margin-top:18px; }
+  .icn{ display:inline-flex; }
+  .icn svg{ display:block; }
+  .search-wrap{ position:relative; margin-bottom:14px; }
+  .search-wrap svg{ position:absolute; left:12px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--text-faint); }
+  .search-wrap input{ padding-left:34px; }
+</style>
+</head>
+<body>
+
+
+<!-- ===================== ICONS (sprite) ===================== -->
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="ic-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 2"/></symbol>
+  <symbol id="ic-scale" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M6 21h12"/><path d="M4 7l4-1.5M4 7l-2.2 5A2.7 2.7 0 004 15a2.7 2.7 0 002.2-3L4 7z"/><path d="M20 7l-4-1.5M20 7l2.2 5A2.7 2.7 0 0120 15a2.7 2.7 0 01-2.2-3L20 7z"/></symbol>
+  <symbol id="ic-handshake" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l4-4 4 3-2 2 3 3 4-4 3 3"/><path d="M12 20l-4-4-3 1-2-2"/><path d="M22 13l-3 3-2-1"/></symbol>
+  <symbol id="ic-book" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 016.5 3H20v15.5H6.5A2.5 2.5 0 004 16"/><path d="M4 16v3a2.5 2.5 0 002.5 2.5H20"/></symbol>
+  <symbol id="ic-quote" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8c-2.2 0-4 1.8-4 4v4h5v-5H5.2C5.6 9.5 6.7 8.6 8 8.3"/><path d="M17 8c-2.2 0-4 1.8-4 4v4h5v-5h-2.8c.4-1.5 1.5-2.4 2.8-2.7"/></symbol>
+  <symbol id="ic-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a1.7 1.7 0 000-3l1-1.7-1.7-1.7-1.7 1a1.7 1.7 0 00-3 0l-1-1.7H11l-1 1.7a1.7 1.7 0 00-3 0l-1.7-1L3.6 8.8l1 1.7a1.7 1.7 0 000 3l-1 1.7 1.7 1.7 1.7-1a1.7 1.7 0 003 0l1 1.7h2l1-1.7a1.7 1.7 0 003 0l1.7 1 1.7-1.7-1-1.7z"/></symbol>
+  <symbol id="ic-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></symbol>
+  <symbol id="ic-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="ic-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+  <symbol id="ic-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="ic-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/></symbol>
+</svg>
+
+<div id="app">
+  <div class="topbar">
+    <button class="tb-btn" id="btn-back" style="display:none" aria-label="Retour"><svg><use href="#ic-back"/></svg></button>
+    <h1 id="tb-title">Boîte à outils CPH</h1>
+    <button class="tb-btn" id="btn-settings" aria-label="Réglages"><svg><use href="#ic-gear"/></svg></button>
+  </div>
+  <main id="main"></main>
+</div>
+
+<div id="sheet-overlay">
+  <div id="sheet" role="dialog" aria-modal="true"><div class="sheet-grip"></div><div id="sheet-content"></div></div>
+</div>
+<div id="toast"></div>
+<div id="print-area"></div>
+
+<script>
+(function(){
+"use strict";
+
+/* =================================================================
+   DONNÉES SOURCES
+   ================================================================= */
+
+var STORAGE_KEY = "cph-toolbox.state.v1";
+
+var NATURES = [
+  {id:"preparation", label:"Préparation d’audience", hint:"Jusqu’à 1h indemnisable — art. R1423-55 du Code du travail."},
+  {id:"audience", label:"Audience (BJ, BCO, référé…)"},
+  {id:"delibere", label:"Délibéré et rédaction"},
+  {id:"conciliation", label:"Conciliation"},
+  {id:"permanence", label:"Permanence / accueil"},
+  {id:"formation", label:"Formation continue"},
+  {id:"reunion", label:"Réunion de service"},
+  {id:"trajet", label:"Trajet"},
+  {id:"autre", label:"Autre"}
+];
+
+var SECTIONS = ["Encadrement","Industrie","Commerce","Agriculture","Activités diverses"];
+
+var DURATIONS = [15,30,45,60,90,120];
+
+var REF_TEXTS = [
+  {id:"cpc15", code:"CPC · art. 15", title:"Communication des pièces et moyens", text:"Les parties doivent se faire connaître mutuellement en temps utile les moyens de fait sur lesquels elles fondent leurs prétentions, les éléments de preuve qu’elles produisent et les moyens de droit qu’elles invoquent, afin que chacune soit à même d’organiser sa défense."},
+  {id:"cpc22", code:"CPC · art. 22", title:"Publicité des débats", text:"Les débats sont publics, sauf les cas où la loi exige ou permet qu’ils aient lieu en chambre du conseil."},
+  {id:"cpc321", code:"CPC · art. 32-1", title:"Amende civile pour procédure abusive", text:"Celui qui agit en justice de manière dilatoire ou abusive peut être condamné à une amende civile d’un maximum de 10 000 euros, sans préjudice des dommages-intérêts qui seraient réclamés."},
+  {id:"cpc367", code:"CPC · art. 367", title:"Jonction et disjonction d’instances", text:"Le juge peut, à la demande des parties ou d’office, ordonner la jonction de plusieurs instances pendantes devant lui s’il existe entre les litiges un lien tel qu’il soit de l’intérêt d’une bonne justice de les faire instruire ou juger ensemble. Il peut également ordonner la disjonction d’une instance en plusieurs."},
+  {id:"cpc370", code:"CPC · art. 370", title:"Interruption de l’instance par décès", text:"L’instance est interrompue par le décès d’une partie lorsque l’action est transmissible à ses ayants droit. (Résumé du fil rouge — se référer au texte intégral sur Légifrance.)"},
+  {id:"cpc373", code:"CPC · art. 373", title:"Reprise d’instance", text:"L’instance peut être reprise par les ayants droit ou le représentant légal de la partie décédée. (Résumé du fil rouge — se référer au texte intégral sur Légifrance.)"},
+  {id:"cpc438", code:"CPC · art. 438", title:"Police de l’audience", text:"Le président veille à l’ordre de l’audience. Tout ce qu’il ordonne pour l’assurer doit être immédiatement exécuté."},
+  {id:"cpc439", code:"CPC · art. 439", title:"Attitude du public, expulsion", text:"Les personnes qui assistent à l’audience doivent observer une attitude digne et garder le respect dû à la justice. Il leur est interdit de parler sans y avoir été invitées, de donner des signes d’approbation ou de désapprobation, ou de causer du désordre de quelque nature que ce soit. Le président peut faire expulser toute personne qui n’obtempère pas à ses injonctions, sans préjudice des poursuites pénales ou disciplinaires qui pourraient être exercées contre elle."},
+  {id:"cpc440", code:"CPC · art. 440", title:"Direction des débats", text:"Le président dirige les débats. Il donne la parole au rapporteur dans le cas où un rapport doit être fait. Le demandeur, puis le défendeur, sont ensuite invités à exposer leurs prétentions. Lorsque la juridiction s’estime éclairée, le président fait cesser les plaidoiries ou les observations présentées par les parties pour leur défense."},
+  {id:"cpc4461", code:"CPC · art. 446-1", title:"Procédure orale", text:"Les parties présentent oralement à l’audience leurs prétentions et les moyens à leur soutien. Elles peuvent également se référer aux prétentions et aux moyens qu’elles auraient formulés par écrit. Les observations des parties sont notées au dossier ou consignées dans un procès-verbal."},
+  {id:"ct-l14571", code:"C. trav. · art. L1457-1", title:"Cas de récusation d’un conseiller", text:"Le conseiller prud’homme peut être récusé : 1° Lorsqu’il a un intérêt personnel à la contestation, le seul fait d’être affilié à une organisation syndicale ne constituant pas cet intérêt personnel ; 2° Lorsqu’il est conjoint, partenaire lié par un pacte civil de solidarité, concubin, parent ou allié jusqu’au degré de cousin germain inclusivement d’une des parties ; 3° Si, dans l’année qui a précédé la récusation, il y a eu action judiciaire, criminelle ou civile entre lui et une des parties ou son conjoint, partenaire lié par un pacte civil de solidarité, concubin ou ses parents ou alliés en ligne directe ; 4° S’il a donné un avis écrit dans l’affaire ; 5° S’il est employeur ou salarié de l’une des parties en cause."},
+  {id:"ct-d144225", code:"C. trav. · art. D1442-25", title:"Médaille des conseillers", text:"Les membres du conseil de prud’hommes portent, soit à l’audience, soit dans les cérémonies publiques, suspendue à un ruban, en sautoir, une médaille signe de leurs fonctions. Cette médaille est en bronze doré pour le président du conseil de prud’hommes et, à l’audience, pour le président du bureau de jugement. Elle est en bronze argenté pour les autres conseillers. D’un module de 65 mm, elle porte à l’avers la mention République française et une tête symbolisant la République, placée de profil, tournée à droite. La médaille est suspendue à un ruban d’une largeur de 75 mm au moyen d’une attache d’une largeur de 75 mm portant un rameau d’olivier. Ce ruban est divisé dans le sens vertical en deux parties égales, rouge et bleue."},
+  {id:"ct-r142355", code:"C. trav. · art. R1423-55", title:"Durées indemnisables", text:"Fixe les durées indemnisables au CPH. Préparation d’audience : jusqu’à 1h. (Résumé du fil rouge — vérifier le texte intégral et son actualité sur Légifrance avant toute déclaration de vacation.)"},
+  {id:"ct-r14532", code:"C. trav. · art. R1453-2", title:"Personnes habilitées à représenter", text:"Les personnes habilitées à assister ou à représenter les parties sont : 1° Les salariés ou les employeurs appartenant à la même branche d’activité ; 2° Les défenseurs syndicaux ; 3° Le conjoint, le partenaire lié par un pacte civil de solidarité ou le concubin ; 4° Les avocats. L’employeur peut également se faire assister ou représenter par un membre de l’entreprise ou de l’établissement fondé de pouvoir ou habilité à cet effet. Le représentant, s’il n’est pas avocat, doit justifier d’un pouvoir spécial. Devant le bureau de conciliation et d’orientation, cet écrit doit l’autoriser à concilier au nom et pour le compte du mandant, et à prendre part aux mesures d’orientation."},
+  {id:"ct-l14111", code:"C. trav. · art. L1411-1", title:"Mission de conciliation", text:"Le conseil de prud’hommes concourt à la conciliation entre les parties."},
+  {id:"ct-l14112", code:"C. trav. · art. L1411-2", title:"Interruption pour faciliter la conciliation", text:"Le procès peut être interrompu ou ajourné pour faciliter la conciliation. (Résumé du fil rouge — se référer au texte intégral sur Légifrance.)"},
+  {id:"rin13bis", code:"RIN · art. 1.3 bis", title:"Port de la robe par l’avocat", text:"Ainsi qu’il est prévu à l’article 3 de la loi n° 71-1130 du 31 décembre 1971 portant réforme de certaines professions judiciaires et juridiques, les avocats « revêtent dans l’exercice de leurs fonctions judiciaires, le costume de leur profession ». L’avocat ne porte aucun signe distinctif avec sa robe."},
+  {id:"cp4333", code:"C. pén. · art. 433-3", title:"Menaces envers une personne dépositaire de l’autorité publique", text:"Référencé dans le fil rouge à propos des poursuites pénales pour trouble à l’audience. Texte intégral non reproduit ici — consulter Légifrance."},
+  {id:"cp43424", code:"C. pén. · art. 434-24", title:"Outrage à magistrat", text:"Référencé dans le fil rouge à propos de l’outrage à une personne dépositaire de l’autorité publique dans l’exercice de ses fonctions. Texte intégral non reproduit ici — consulter Légifrance."}
+];
+
+var PHRASES = [
+  {phase:"Ouverture", text:"L’audience est ouverte, veuillez vous asseoir."},
+  {phase:"Appel des causes", text:"Monsieur/Madame le Greffier, veuillez s’il vous plaît procéder à l’appel des causes."},
+  {phase:"Appel des causes", text:"Affaire retenue."},
+  {phase:"Appel des causes", text:"Contre-appel."},
+  {phase:"Suspension / reprise", text:"L’audience est suspendue."},
+  {phase:"Suspension / reprise", text:"L’audience est reprise."},
+  {phase:"Incidents", text:"Le Conseil joint l’incident au fond."},
+  {phase:"Discipline", text:"Le public est tenu à une attitude digne. En cas de nouveau trouble, il sera procédé à votre expulsion de la salle."},
+  {phase:"Décès d’une partie", text:"Le président prend acte du décès de la partie demanderesse (ou défenderesse). L’instance est suspendue en attente de reprise par ses ayants droit. Le greffe fixera un délai de 12 mois pour reprise, passé lequel le dossier sera radié."},
+  {phase:"Clôture du débat", text:"Les débats sont clos, l’affaire est mise en délibéré. La décision sera mise à disposition au Greffe le XX/XX/XXXX."},
+  {phase:"Levée de l’audience", text:"Le rôle étant épuisé, l’audience est levée."}
+];
+
+/* Guide « Présider un BJ » — fil rouge complet */
+var BJ_STEPS = [
+  {id:"preparer", title:"Préparer son audience", blocks:[
+    {t:"p", v:"30 à 60 minutes avant l’audience, prendre connaissance des dossiers."},
+    {t:"refs", v:["ct-r142355"]},
+    {t:"checklist", v:["Toutes les parties ont-elles été touchées ? (voir « Absence d’une partie »)","Noter les incidents attendus (demandes de renvoi, non comparution…)","Prendre connaissance des dispositifs (demandes respectives)","Informer les assesseurs des informations récoltées","Vérifier que les assesseurs ne sont pas liés aux parties (voir « Récusation »)"]},
+    {t:"p", v:"Si nécessaire :"},
+    {t:"checklist", v:["Établir avec les assesseurs les conduites à tenir en amont sur les incidents attendus.","Échanger avec le Greffe","Rechercher les fondements légaux des incidents à gérer"]}
+  ]},
+  {id:"ouvrir", title:"Ouvrir l’audience", blocks:[
+    {t:"p", v:"Dans le couloir :"},
+    {t:"checklist", v:["Laisser le Greffe s’installer","Vérifier que tous les assesseurs portent la médaille et une tenue correcte","Organiser l’ordre d’entrée","Sonner et entrer"]},
+    {t:"refs", v:["ct-d144225"]},
+    {t:"p", v:"En entrant :"},
+    {t:"checklist", v:["Dire « Bonjour » à l’attention de l’audience","Vérifier que l’audience est bien publique : porte ouverte / non verrouillée, rien ne doit décourager le public d’entrer","S’assurer que tout le monde est debout. Le cas échéant demander aux récalcitrants de se lever.","Annoncer l’ouverture de l’audience"]},
+    {t:"refs", v:["cpc22"]},
+    {t:"quote", v:"L’audience est ouverte, veuillez vous asseoir."},
+    {t:"note", v:"Le cérémonial d’entrée est primordial. Saluez la salle et faites-la asseoir avec un ton courtois mais ferme et une voix forte. Une autorité installée dès le début facilite grandement la tenue de l’audience."}
+  ]},
+  {id:"appel", title:"L’appel des causes", blocks:[
+    {t:"p", v:"Une fois le Conseil et le Greffe installés, demander au Greffe de procéder à l’appel des causes ou le faire soi-même."},
+    {t:"quote", v:"Monsieur/Madame le Greffier, veuillez s’il vous plaît procéder à l’appel des causes."},
+    {t:"p", v:"Pour chaque affaire :"},
+    {t:"subcase", title:"Si une partie est présente non représentée et non assistée", v:["Demander au Greffe de procéder aux contrôles d’identité pour les personnes physiques et de mandat pour les personnes morales."]},
+    {t:"subcase", title:"Si une partie est assistée ou représentée par un avocat", v:["S’assurer que l’avocat porte sa robe (sinon interdiction de plaider)"], refs:["rin13bis"]},
+    {t:"subcase", title:"Si une partie est assistée ou représentée par une autre personne", v:["Vérifier que cette dernière soit dans l’un des cas suivants (sinon interdiction de plaider) : défenseur syndical (vérifier arrêté), conjoint ou concubin (vérifier pouvoir), salarié ou employeur de la même branche (vérifier convention collective + pouvoir)."], refs:["ct-r14532"]},
+    {t:"subcase", title:"Si la partie en demande est absente non représentée", v:["Vérifier si la partie a bien été convoquée.","Demander à la partie adverse sa position vis-à-vis de cette absence (souhaite plaider, renvoyer, radiation/caducité…).","Suspendre si nécessaire l’audience, sortir avec les assesseurs et prendre une décision : écoute de la partie adverse (affaire retenue) / renvoi de l’affaire / radiation de l’affaire (sanction légère — pas d’impact sur la prescription) / caducité de l’affaire (sanction sévère — impact sur la prescription).","Annoncer publiquement la décision après reprise de l’audience."]},
+    {t:"subcase", title:"Si la partie en défense est absente non représentée", v:["Vérifier si la partie a bien été touchée.","Demander à la partie adverse sa position vis-à-vis de cette absence.","Suspendre si nécessaire, sortir avec les assesseurs et décider : écoute de la partie adverse (affaire retenue) / renvoi de l’affaire (partie non touchée).","Annoncer publiquement la décision après reprise de l’audience."]},
+    {t:"subcase", title:"Si une partie demande un renvoi", v:["Demander sa position à l’autre partie.","Suspendre si nécessaire, sortir avec les assesseurs et décider : rejet du motif de renvoi — affaire retenue (présence d’une ordonnance de clôture, non-respect des délais utiles) / renvoi de l’affaire si motif légitime et ne portant pas atteinte au contradictoire.","Annoncer publiquement la décision après reprise de l’audience."], refs:["cpc15"]},
+    {t:"subcase", title:"Si les parties sont prêtes à plaider", v:["Annoncer « affaire retenue ». Inviter le Greffe à annoncer l’affaire suivante."]},
+    {t:"subcase", title:"Si l’une ou les parties semblent absentes car en retard", v:["Procéder à un contre-appel en fin d’audience."]},
+    {t:"quote", v:"Affaire retenue. / Contre-appel."}
+  ]},
+  {id:"representation", title:"Représentation des parties", blocks:[
+    {t:"p", v:"En procédure prud’homale, les parties peuvent être assistées ou représentées par :"},
+    {t:"ul", v:["Un avocat portant la robe","Un défenseur syndical (vérifier arrêté + identité)","Le conjoint ou concubin (vérifier pouvoir + identité)","Un salarié ou employeur dépendant de la même convention collective (vérifier CCN + pouvoir + identité)"]},
+    {t:"refs", v:["ct-r14532"]},
+    {t:"note", v:"En dehors de l’avocat portant la robe, vous devez vous assurer de l’identité des parties et de leur pouvoir d’ester en justice, ou confier cette tâche au greffe."}
+  ]},
+  {id:"fin-appel", title:"Fin de l’appel des causes", blocks:[
+    {t:"p", v:"Une fois l’appel des causes terminé, appeler la première affaire retenue. Les affaires sont appelées dans l’ordre suivant :"},
+    {t:"subcase", title:"Si toutes les parties sont représentées par un avocat, respecter les priorités suivantes", v:["1. Avocat venant de loin","2. Avocat le plus ancien","3. Ordre du rôle"]},
+    {t:"subcase", title:"Si une ou des parties ne sont pas représentées par un avocat", v:["L’affaire en question passera à son ordre programmé par l’ordre du rôle. Pour les autres affaires, respecter les critères ci-dessus."]},
+    {t:"note", v:"Exemple — si le rôle prévoit : 1. Avocat 5 ans d’ancienneté, 2. Avocat 10 ans d’ancienneté, 3. Partie sans avocat, 4. Avocat venant de Paris — les affaires seront plaidées dans l’ordre : Paris, 10 ans, partie sans avocat, 5 ans."}
+  ]},
+  {id:"incidents", title:"Incidents in limine litis", blocks:[
+    {t:"p", v:"Lors des plaidoiries, certains incidents peuvent être soulevés par les parties avant plaidoirie : contestation de la compétence du Conseil, non-recevabilité des demandes adverses, etc."},
+    {t:"p", v:"Ces incidents doivent être entendus avant le fond de l’affaire ! Bien qu’il soit possible de prendre une décision sur le champ (se retirer pour délibérer), il est généralement conseillé de joindre l’incident au fond pour bénéficier du temps nécessaire :"},
+    {t:"checklist", v:["Donner la parole aux deux parties sur l’incident soulevé","Annoncer que l’incident sera traité avant dire droit par le Conseil lors du délibéré","Écouter le fond de l’affaire"]},
+    {t:"quote", v:"Le Conseil joint l’incident au fond."}
+  ]},
+  {id:"recusation", title:"La récusation", blocks:[
+    {t:"p", v:"La récusation d’un Conseiller de la formation peut être de sa propre initiative ou à la demande d’une partie."},
+    {t:"p", v:"Il ne s’agit pas de savoir si un Conseiller a ou non un parti pris dans l’affaire ! Il s’agit de se demander si le public ou les parties peuvent raisonnablement avoir ce doute."},
+    {t:"p", v:"Dans le cas d’une récusation volontaire ou d’une demande de récusation, il est important de suspendre l’audience pour en discuter collégialement. Seule cette réflexion partagée permet au Conseiller en question de prendre sa décision. Si la récusation est effective, elle doit impérativement intervenir avant le débat des parties. Les cas de récusation sont dictés par la jurisprudence et l’article L1457-1 du Code du travail."},
+    {t:"refs", v:["ct-l14571"]},
+    {t:"checklist", v:["Suspendre l’audience, sortir avec les assesseurs et prendre une décision.","Annoncer publiquement la décision après reprise de l’audience.","Renvoyer l’affaire si aucun remplacement n’est disponible immédiatement."]},
+    {t:"note", v:"Exemple : une entreprise est représentée par sa DRH, qui se trouve être votre ex-concubine. Vous n’avez plus de contact depuis 15 ans. L’ancienneté de la relation fait que vous vous savez capable de juger en toute impartialité. Vous devez impérativement vous récuser ! En effet, le sujet n’est pas votre capacité à juger en impartialité mais le risque que des personnes en doutent."}
+  ]},
+  {id:"discipline", title:"Discipline : sanctions", blocks:[
+    {t:"p", v:"Des problèmes de discipline se présentent parfois en audience. Ils peuvent survenir de la part du public, d’une partie, d’un avocat… Le président a en charge la police de l’audience."},
+    {t:"refs", v:["cpc438"]},
+    {t:"subcase", title:"Rappel à l’ordre", v:["Le président peut appeler au calme ou demander le silence dans la salle."]},
+    {t:"subcase", title:"Retrait de la parole", v:["Le président peut ordonner à toute personne dans la salle de se taire."], refs:["cpc439"]},
+    {t:"quote", v:"Le public est tenu à une attitude digne. En cas de nouveau trouble, il sera procédé à votre expulsion de la salle."},
+    {t:"p", v:"Le président peut le cas échéant rappeler que perturber une audience est passible de poursuites pénales, tout comme l’outrage à une personne dépositaire de l’autorité publique dans l’exercice de ses fonctions."},
+    {t:"refs", v:["cpc439"]},
+    {t:"subcase", title:"Expulsion", v:["Le président peut ordonner l’expulsion de toute personne de la salle d’audience. Un bouton permet au greffe de faire venir les agents de sécurité."], refs:["cpc439"]},
+    {t:"subcase", title:"Poursuites pénales", v:["Le président peut demander au Greffe de noter au procès-verbal le comportement ou les déclarations de toute personne dans la salle d’audience. Ce procès-verbal pourra être utilisé dans le cadre de poursuites pénales."], refs:["cp4333","cp43424"]},
+    {t:"subcase", title:"Amende au public interdite", v:["Le président ne dispose pas du pouvoir d’infliger une amende au public."]},
+    {t:"subcase", title:"Amende aux parties", v:["Le président peut infliger une amende civile à une partie."], refs:["cpc321"]},
+    {t:"subcase", title:"Levée de l’audience", v:["Le président doit garantir que la justice s’exerce dans des conditions sereines. Si les conditions ne sont pas réunies, il peut décider de lever l’audience et renvoyer les affaires. À n’utiliser qu’en cas d’impossibilité de poursuivre même après avoir évacué le public."]}
+  ]},
+  {id:"renvoi", title:"Renvoi", blocks:[
+    {t:"p", v:"Une demande de renvoi de dernière minute doit être dûment motivée. Dans tous les cas, le Président doit s’assurer du contradictoire en prenant l’avis de la partie adverse. Si rien n’a été convenu au préalable avec les assesseurs, il est recommandé de suspendre l’audience pour en discuter :"},
+    {t:"checklist", v:["Demander sa position à l’autre partie.","Suspendre si nécessaire, sortir avec les assesseurs et décider.","Annoncer publiquement la décision après reprise de l’audience."]},
+    {t:"ul", v:["Rejet du motif de renvoi — affaire retenue (présence d’une ordonnance de clôture, non-respect des délais utiles)","Renvoi de l’affaire si motif légitime et ne portant pas atteinte au contradictoire ni à la bonne administration de la justice"]},
+    {t:"refs", v:["cpc15"]}
+  ]},
+  {id:"jonction", title:"Jonction d’affaires", blocks:[
+    {t:"refs", v:["cpc367"]},
+    {t:"note", v:"Attention, la jonction est une mesure d’administration, elle n’a pas de conséquences sur la « vie » des affaires. Par exemple, si l’une des affaires est frappée de prescription et l’autre non, la jonction n’y change rien. On dit que la jonction a un caractère fonctionnel, non substantiel."}
+  ]},
+  {id:"pieces", title:"Pièces tardives", blocks:[
+    {t:"p", v:"Il peut arriver qu’une partie présente une pièce qui n’a pas été préalablement communiquée à la partie adverse. Le président doit s’assurer du respect du contradictoire : la partie adverse doit avoir eu le temps nécessaire pour préparer sa défense. Un temps utile de communication avant l’audience est donc de mise. Au CPH, le temps utile est fixé à 7 jours, à réévaluer en fonction de la complexité de la pièce."},
+    {t:"checklist", v:["Demander sa position à l’autre partie.","Suspendre si nécessaire, sortir avec les assesseurs et décider.","Annoncer publiquement la décision après reprise de l’audience."]},
+    {t:"ul", v:["Généralement, rejet de la pièce (pièce secondaire, présence d’une ordonnance de clôture ou non-respect des délais utiles)","Renvoi de l’affaire uniquement si demandé par la partie adverse pour y répondre (si pas d’ordonnance de clôture et pièce à fort intérêt)","Pièce acceptée si la partie adverse a eu le temps d’y répondre (et si pas d’ordonnance de clôture)"]},
+    {t:"refs", v:["cpc15"]}
+  ]},
+  {id:"absence", title:"Absence d’une partie", blocks:[
+    {t:"p", v:"Le respect du contradictoire impose au président de s’assurer que l’absence d’une partie est de son fait et non de n’avoir pas été informée de l’audience. Est considérée comme fautive (et donc non excusable) la partie absente qui répond à l’un au moins des critères suivants :"},
+    {t:"ul", v:["A été citée à comparaître à cette audience ou une audience de BJ précédente","A comparu à une audience BJ précédente","A été touchée par la convocation envoyée par le tribunal"]},
+    {t:"note", v:"Exemple : il s’agit d’un BJ direct et la convocation du greffe n’est pas parvenue à la partie. Il ne s’agit donc pas d’un manquement de sa part et la partie présente devra citer à comparaître la partie absente. L’affaire doit être renvoyée."}
+  ]},
+  {id:"deces", title:"Décès d’une partie", blocks:[
+    {t:"p", v:"Si le président est informé lors du BJ du décès d’une partie physique (généralement le salarié), il doit veiller à ce que l’affaire puisse être reprise par ses ayants droit."},
+    {t:"refs", v:["cpc370","cpc373"]},
+    {t:"checklist", v:["Prononcer un sursis à statuer.","Rappeler à l’avocat concerné que, bien n’ayant pas d’obligation de résultats, il est déontologiquement tenu de tout mettre en œuvre pour informer les ayants droit.","Faire noter par le Greffe au procès-verbal."]},
+    {t:"quote", v:"Le président prend acte du décès de la partie demanderesse. L’instance est suspendue en attente de reprise par ses ayants droit. Le greffe fixera un délai de 12 mois pour reprise, passé lequel le dossier sera radié."}
+  ]},
+  {id:"conciliation", title:"Conciliation", blocks:[
+    {t:"p", v:"La mission première du CPH est la conciliation. Celle-ci est possible à tout moment de la procédure, y compris en BJ. Le président doit activement chercher la conciliation."},
+    {t:"refs", v:["ct-l14111","ct-l14112"]},
+    {t:"p", v:"L’étape de négociation entre les parties pour aboutir à une conciliation est secrète. Aussi, si l’opportunité se présente en BJ, le président doit inviter les parties à quitter la salle d’audience publique pour discuter entre elles :"},
+    {t:"checklist", v:["Inviter les parties à sortir discuter entre elles."]},
+    {t:"p", v:"Au retour des parties :"},
+    {t:"checklist", v:["Faire noter la conciliation sur le procès-verbal par le Greffe.","Demander au demandeur s’il se désiste de l’instance, de l’action ou des deux (voir « Désistement »)."]}
+  ]},
+  {id:"transaction", title:"Accord transactionnel", blocks:[
+    {t:"p", v:"Il peut arriver que les parties annoncent en BJ qu’elles ont signé un accord transactionnel. Elles peuvent en demander l’homologation."},
+    {t:"subcase", title:"Si pas de demande d’homologation", v:["Faire noter la signature de l’accord sur le procès-verbal par le Greffe.","Demander au demandeur s’il se désiste de l’instance, de l’action ou des deux (voir « Désistement »)."]},
+    {t:"subcase", title:"Si demande d’homologation", v:["Demander au demandeur s’il se désiste de l’instance, de l’action ou des deux (voir « Désistement »).","Mettre l’affaire en délibéré (rédaction de l’homologation)."]}
+  ]},
+  {id:"desistement", title:"Désistement", blocks:[
+    {t:"p", v:"Ne pas confondre les notions d’« instance » et d’« action ». Action : droit d’une personne d’ester en justice sur un sujet donné. Instance : procédure née de l’action. Ainsi, il peut y avoir plusieurs instances pour une même action, par exemple s’il y a eu radiation et réinscription, ou encore une procédure au CPH suivie d’un appel."},
+    {t:"p", v:"Lorsqu’un demandeur se désiste, il doit préciser s’il renonce uniquement au dossier en cours (instance) ou également à son droit d’ester en justice sur ce sujet (action). Toujours faire noter la décision du demandeur au procès-verbal : désistement d’instance OU désistement d’instance et d’action."},
+    {t:"note", v:"Attention, la partie adverse peut s’y opposer : toujours entendre les deux parties avant de se prononcer !"}
+  ]},
+  {id:"notes-audience", title:"Notes d’audience", blocks:[
+    {t:"p", v:"La procédure prud’homale est orale : ce qui est dit en audience vaut conclusions et doit donc être consigné."},
+    {t:"refs", v:["cpc4461"]},
+    {t:"p", v:"Les notes prises par le président et les assesseurs n’ont pas de valeur légale."},
+    {t:"note", v:"Seules les notes prises par le Greffier, fonctionnaire assermenté, ont valeur légale. Ainsi, les points essentiels dits oralement par les parties ou le Conseil doivent être notés au procès-verbal par le Greffier pour référence ultérieure. Le président peut demander au Greffier de noter des éléments qui lui semblent importants."}
+  ]},
+  {id:"cloture", title:"Clôture du débat", blocks:[
+    {t:"p", v:"Le président doit s’assurer du contradictoire : si une partie reprend la parole, l’autre partie doit être entendue ; la partie en défense doit avoir le dernier mot. Le président doit proposer la parole aux assesseurs. En cas de question d’assesseur, faire respecter le contradictoire (les deux parties sont entendues, la défense en dernier lieu)."},
+    {t:"checklist", v:["Annoncer que les débats sont clos et l’affaire mise en délibéré.","S’assurer que les pièces et conclusions remises à l’audience soient « visées » par le Greffe.","S’assurer que les conclusions comportent un bordereau de pièces (obligatoire).","Renseigner sur la pochette, en page 3, les noms des conseillers et du greffe ainsi que la date de prononcé retenue."]},
+    {t:"quote", v:"Les débats sont clos, l’affaire est mise en délibéré. La décision sera mise à disposition au Greffe le XX/XX/XXXX."},
+    {t:"note", v:"L’article 6.1 de la Convention Européenne des Droits de l’Homme impose une décision rapide après le BJ. Au CPH, est considéré comme raisonnable un délai d’un mois et, en tout état de cause, inférieur à 3 mois. Le Greffe vous prépare généralement des dates de prononcé : elles sont indicatives, vous seul avez autorité et pouvez décider d’une autre date en fonction du contexte."}
+  ]},
+  {id:"levee", title:"Levée de l’audience", blocks:[
+    {t:"p", v:"Une fois toutes les affaires retenues entendues, procéder au contre-appel le cas échéant. Une fois le contre-appel terminé :"},
+    {t:"quote", v:"Le rôle étant épuisé, l’audience est levée."}
+  ]}
+];
+
+/* Guide « Présider un BCO » — squelette provisoire, à valider avec vos propres sources */
+var BCO_STEPS = [
+  {id:"bco-preparer", title:"Préparer son audience de BCO", blocks:[
+    {t:"p", v:"Prendre connaissance des dossiers inscrits au rôle et vérifier que les convocations ont bien été délivrées aux deux parties."},
+    {t:"checklist", v:["Vérifier la composition de la formation (conseiller salarié + conseiller employeur)","Repérer les dossiers pouvant faire l’objet d’une orientation directe (départage, mesures d’urgence…)","Vérifier la disponibilité du greffe pour les actes à établir en séance"]}
+  ]},
+  {id:"bco-ouvrir", title:"Ouvrir l’audience", blocks:[
+    {t:"p", v:"Ouverture selon le même cérémonial que pour le BJ : entrée, salut de la salle, annonce d’ouverture."},
+    {t:"checklist", v:["Vérifier que l’audience est publique, sauf phase de conciliation (voir ci-dessous)","Procéder à l’appel des causes"]}
+  ]},
+  {id:"bco-verif", title:"Vérifications préalables", blocks:[
+    {t:"p", v:"Comme en BJ : identité des parties, qualité du représentant, pouvoir le cas échéant."},
+    {t:"checklist", v:["Contrôler la présence et l’identité des parties ou de leur représentant","Vérifier les pouvoirs de représentation devant le bureau de conciliation"]},
+    {t:"refs", v:["ct-r14532"]}
+  ]},
+  {id:"bco-conciliation", title:"Tentative de conciliation", blocks:[
+    {t:"p", v:"La tentative de conciliation est le cœur de l’audience de BCO. Elle se déroule en principe hors la présence du public."},
+    {t:"checklist", v:["Rappeler aux parties l’objet et le caractère confidentiel de cette phase","Inviter les parties (et leurs représentants) à échanger sur une issue amiable","Constater l’accord ou l’échec de la conciliation avec le Greffe"]},
+    {t:"refs", v:["ct-l14111","ct-l14112"]}
+  ]},
+  {id:"bco-orientation", title:"Orientation de l’affaire", blocks:[
+    {t:"p", v:"En l’absence de conciliation totale, le bureau oriente l’affaire selon sa nature et sa complexité."},
+    {t:"checklist", v:["Orientation vers le bureau de jugement en formation normale","Orientation vers une formation restreinte, si les conditions légales sont réunies et à la demande des deux parties","Renvoi direct en formation de départage, si le cas le justifie"]}
+  ]},
+  {id:"bco-mesures", title:"Mesures et provisions", blocks:[
+    {t:"p", v:"Le bureau de conciliation et d’orientation dispose de pouvoirs propres, notamment pour ordonner des mesures d’instruction ou allouer des provisions."},
+    {t:"checklist", v:["Examiner les demandes de provision sur salaire ou indemnités non sérieusement contestables","Examiner les demandes de mesures d’instruction (communication de pièces, etc.)"]}
+  ]},
+  {id:"bco-cloture", title:"Clôture de l’audience", blocks:[
+    {t:"p", v:"Notifier aux parties la décision d’orientation prise et les prochaines échéances (date d’audience de jugement, calendrier de procédure)."},
+    {t:"checklist", v:["S’assurer que le procès-verbal reflète l’accord, l’échec de conciliation et l’orientation retenue","Communiquer la prochaine date utile aux parties"]}
+  ]}
+];
+
+/* =================================================================
+   ÉTAT & PERSISTANCE
+   ================================================================= */
+
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+function todayISO(){ var d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function clone(o){ return JSON.parse(JSON.stringify(o)); }
+
+var DEFAULT_STATE = {
+  v:1,
+  theme:"system",
+  profile:{ name:"", cph:"", section:"" },
+  vacations:[],
+  bj:{ checked:[], startedAt:null },
+  bco:{ checked:[], startedAt:null }
+};
+
+function migrate(parsed){
+  var s = clone(DEFAULT_STATE);
+  if(parsed && typeof parsed === "object"){
+    if(parsed.theme==="light"||parsed.theme==="dark"||parsed.theme==="system") s.theme=parsed.theme;
+    if(parsed.profile && typeof parsed.profile==="object"){
+      s.profile.name = typeof parsed.profile.name==="string" ? parsed.profile.name : "";
+      s.profile.cph = typeof parsed.profile.cph==="string" ? parsed.profile.cph : "";
+      s.profile.section = typeof parsed.profile.section==="string" ? parsed.profile.section : "";
+    }
+    if(Array.isArray(parsed.vacations)){
+      s.vacations = parsed.vacations.map(function(v){
+        return {
+          id: v && v.id ? String(v.id) : uid(),
+          date: v && v.date ? String(v.date) : todayISO(),
+          nature: v && v.nature ? String(v.nature) : "autre",
+          minutes: v && isFinite(v.minutes) ? Number(v.minutes) : 0,
+          section: v && v.section ? String(v.section) : "",
+          notes: v && v.notes ? String(v.notes) : ""
+        };
+      });
+    }
+    if(parsed.bj && typeof parsed.bj==="object"){
+      s.bj.checked = Array.isArray(parsed.bj.checked) ? parsed.bj.checked.map(String) : [];
+      s.bj.startedAt = parsed.bj.startedAt || null;
+    }
+    if(parsed.bco && typeof parsed.bco==="object"){
+      s.bco.checked = Array.isArray(parsed.bco.checked) ? parsed.bco.checked.map(String) : [];
+      s.bco.startedAt = parsed.bco.startedAt || null;
+    }
+  }
+  return s;
+}
+
+function loadState(){
+  try{
+    var raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return clone(DEFAULT_STATE);
+    return migrate(JSON.parse(raw));
+  }catch(e){ return clone(DEFAULT_STATE); }
+}
+function saveState(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){} }
+
+var state = loadState();
+
+/* =================================================================
+   CAPACITÉS (downloads)
+   ================================================================= */
+var downloadsCap = null;
+var downloadsReady = (function(){
+  if(window.claude && typeof window.claude.use === "function"){
+    return window.claude.use("downloads").then(function(cap){ downloadsCap = cap; return cap; }).catch(function(){ return null; });
+  }
+  return Promise.resolve(null);
+})();
+
+function blobDownload(filename, contents){
+  try{
+    var blob = new Blob([contents], {type:"text/plain;charset=utf-8"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = filename; a.style.display="none";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+    toast("Fichier « "+filename+" » téléchargé.");
+  }catch(e){ toast("Le téléchargement n’a pas pu aboutir — utilisez l’aperçu impression."); }
+}
+function saveFile(baseName, extPreferred, extFallback, contents){
+  if(!downloadsCap){
+    blobDownload(baseName+"."+extPreferred, contents);
+    return;
+  }
+  downloadsCap.save({ filename: baseName+"."+extPreferred, data: contents }).then(function(){
+    toast("Fichier « "+baseName+"."+extPreferred+" » enregistré.");
+  }).catch(function(err){
+    if(err && err.code==="extension_not_enabled" && extFallback){
+      downloadsCap.save({ filename: baseName+"."+extFallback, data: contents }).then(function(){
+        toast("Fichier « "+baseName+"."+extFallback+" » enregistré.");
+      }).catch(function(){ blobDownload(baseName+"."+(extFallback||extPreferred), contents); });
+    } else if(err && err.code==="declined"){
+      toast("Téléchargement annulé.");
+    } else {
+      blobDownload(baseName+"."+extPreferred, contents);
+    }
+  });
+}
+
+/* =================================================================
+   HELPERS DOM
+   ================================================================= */
+function h(tag, attrs){
+  var e = document.createElement(tag);
+  var children = Array.prototype.slice.call(arguments, 2);
+  if(attrs){
+    for(var k in attrs){
+      if(attrs[k]===undefined || attrs[k]===null || attrs[k]===false) continue;
+      if(k==="class") e.className = attrs[k];
+      else if(k==="html") e.innerHTML = attrs[k];
+      else if(k.indexOf("on")===0 && typeof attrs[k]==="function") e.addEventListener(k.slice(2), attrs[k]);
+      else e.setAttribute(k, attrs[k]);
+    }
+  }
+  function append(c){
+    if(c===undefined || c===null || c===false) return;
+    if(Array.isArray(c)){ c.forEach(append); return; }
+    e.appendChild(typeof c==="string" || typeof c==="number" ? document.createTextNode(c) : c);
+  }
+  children.forEach(append);
+  return e;
+}
+function icon(id, cls){
+  var span = document.createElement("span");
+  span.className = "icn" + (cls ? " "+cls : "");
+  span.innerHTML = '<svg viewBox="0 0 24 24" width="100%" height="100%"><use href="#'+id+'"></use></svg>';
+  return span;
+}
+function clear(el){ while(el.firstChild) el.removeChild(el.firstChild); }
+
+var toastTimer=null;
+function toast(msg){
+  var t=document.getElementById("toast");
+  t.textContent=msg; t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(function(){ t.classList.remove("show"); }, 2600);
+}
+
+function openSheet(title, contentEl){
+  var wrap = document.getElementById("sheet-content");
+  clear(wrap);
+  if(title) wrap.appendChild(h("h2", null, title));
+  wrap.appendChild(contentEl);
+  document.getElementById("sheet-overlay").classList.add("open");
+}
+function closeSheet(){ document.getElementById("sheet-overlay").classList.remove("open"); }
+document.getElementById("sheet-overlay").addEventListener("click", function(e){
+  if(e.target.id==="sheet-overlay") closeSheet();
+});
+
+function copyText(str){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(str).then(function(){ toast("Copié dans le presse-papiers."); }).catch(function(){ toast("Impossible de copier."); });
+  }
+}
+
+/* =================================================================
+   THÈME
+   ================================================================= */
+function applyTheme(){
+  if(state.theme==="system") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", state.theme);
+}
+applyTheme();
+
+/* =================================================================
+   NAVIGATION
+   ================================================================= */
+var navStack = ["home"];
+var SCREEN_TITLES = {
+  home:"Boîte à outils CPH", vacations:"Feuille de vacation", bj:"Présider un BJ",
+  bco:"Présider un BCO", refs:"Textes de référence", phrases:"Phrases rituelles", settings:"Réglages"
+};
+var renderers = {};
+
+function go(screenId, replace){
+  if(!replace) navStack.push(screenId);
+  else navStack[navStack.length-1]=screenId;
+  render(screenId);
+}
+function goBack(){
+  if(navStack.length>1){ navStack.pop(); render(navStack[navStack.length-1]); }
+}
+function render(screenId){
+  document.getElementById("tb-title").textContent = SCREEN_TITLES[screenId] || "";
+  document.getElementById("btn-back").style.display = screenId==="home" ? "none" : "flex";
+  var main = document.getElementById("main");
+  clear(main);
+  var screen = h("div", {class:"screen active", id:"screen-"+screenId});
+  main.appendChild(screen);
+  if(renderers[screenId]) renderers[screenId](screen);
+  main.scrollTop = 0;
+}
+
+document.getElementById("btn-back").addEventListener("click", goBack);
+document.getElementById("btn-settings").addEventListener("click", function(){ go("settings"); });
+
+/* =================================================================
+   ÉCRAN — ACCUEIL
+   ================================================================= */
+renderers.home = function(root){
+  root.appendChild(h("div", {class:"hero"},
+    h("div", {class:"eyebrow"}, "Conseil de prud’hommes"),
+    h("h1", null, state.profile.name ? "Bonjour, "+state.profile.name : "Votre boîte à outils"),
+    h("p", null, "Les repères et documents pratiques pour préparer, présider et clôturer vos audiences — tout reste enregistré sur cet appareil.")
+  ));
+
+  function card(icon_id, title, desc, screenId, badge, wide){
+    return h("div", {class:"tool-card"+(wide?" wide":""), onclick:function(){ go(screenId); }, tabindex:"0",
+        onkeydown:function(e){ if(e.key==="Enter") go(screenId); }},
+      badge,
+      h("div", {class:"ic"}, icon(icon_id)),
+      h("div", null, h("div", {class:"t"}, title), h("div", {class:"d"}, desc))
+    );
+  }
+
+  var grid = h("div", {class:"card-grid"},
+    card("ic-clock", "Feuille de vacation", "Saisir vos vacations et générer le relevé du mois", "vacations"),
+    card("ic-scale", "Présider un BJ", "Le fil rouge complet, étape par étape", "bj"),
+    card("ic-handshake", "Présider un BCO", "Trame de conciliation et d’orientation", "bco", h("span",{class:"badge amber"},"Brouillon")),
+    card("ic-book", "Textes de référence", "Articles cités, recherche rapide", "refs"),
+    card("ic-quote", "Phrases rituelles", "Les formules à annoncer en audience", "phrases", null, true)
+  );
+  root.appendChild(grid);
+
+  root.appendChild(h("div", {class:"footnote"},
+    "Contenu du guide « Présider un BJ » d’après votre document de référence. Envoyez-moi vos propres trames pour enrichir ou corriger un module — la boîte à outils est faite pour évoluer."
+  ));
+};
+
+/* =================================================================
+   ÉCRAN — FEUILLE DE VACATION
+   ================================================================= */
+function minutesLabel(m){
+  var hh=Math.floor(m/60), mm=m%60;
+  if(hh<=0) return mm+" min";
+  if(mm===0) return hh+"h";
+  return hh+"h"+String(mm).padStart(2,"0");
+}
+function monthKey(dateStr){ return dateStr.slice(0,7); }
+function monthLabel(key){
+  var parts=key.split("-"); var d=new Date(Number(parts[0]), Number(parts[1])-1, 1);
+  var s=d.toLocaleDateString("fr-FR", {month:"long", year:"numeric"});
+  return s.charAt(0).toUpperCase()+s.slice(1);
+}
+function shiftMonthKey(key, delta){
+  var parts=key.split("-"); var y=parseInt(parts[0],10); var m=parseInt(parts[1],10)-1;
+  m += delta; y += Math.floor(m/12); m = ((m%12)+12)%12;
+  return y+"-"+String(m+1).padStart(2,"0");
+}
+function parseISODate(str){ var p=str.split("-"); return new Date(Number(p[0]), Number(p[1])-1, Number(p[2])); }
+var vacViewMonth = monthKey(todayISO());
+
+function natureLabel(id){ var n=NATURES.filter(function(x){return x.id===id;})[0]; return n ? n.label : id; }
+
+function openVacationForm(existing){
+  var isEdit = !!existing;
+  var draft = existing ? Object.assign({}, existing) : { id:uid(), date:todayISO(), nature:"audience", minutes:60, section:state.profile.section||"", notes:"" };
+
+  var form = h("div", null);
+  form.appendChild(h("label", {class:"field-label"}, "Date"));
+  var dateInput = h("input", {type:"date", value:draft.date});
+  form.appendChild(dateInput);
+
+  form.appendChild(h("label", {class:"field-label"}, "Nature de la vacation"));
+  var natureSel = h("select", null, NATURES.map(function(n){
+    return h("option", {value:n.id, selected: n.id===draft.nature ? "selected" : null}, n.label);
+  }));
+  form.appendChild(natureSel);
+  var hint = h("div", {class:"footnote", style:"margin-top:6px"}, "");
+  form.appendChild(hint);
+  function updateHint(){
+    var n=NATURES.filter(function(x){return x.id===natureSel.value;})[0];
+    hint.textContent = n && n.hint ? n.hint : "";
+  }
+  natureSel.addEventListener("change", updateHint); updateHint();
+
+  form.appendChild(h("label", {class:"field-label"}, "Durée"));
+  var minutesVal = draft.minutes;
+  var chipsWrap = h("div", {class:"chip-row"});
+  DURATIONS.forEach(function(m){
+    var c = h("span", {class:"chip"+(m===minutesVal?" active":""), onclick:function(){
+      minutesVal=m; hoursIn.value=Math.floor(m/60); minsIn.value=m%60;
+      Array.prototype.forEach.call(chipsWrap.children, function(el){ el.classList.remove("active"); });
+      c.classList.add("active");
+    }}, minutesLabel(m));
+    chipsWrap.appendChild(c);
+  });
+  form.appendChild(chipsWrap);
+  var customRow = h("div", {class:"btn-row", style:"margin-top:10px"});
+  var hoursIn = h("input", {type:"number", min:"0", max:"12", value:String(Math.floor(minutesVal/60)), style:"text-align:center"});
+  var minsIn = h("input", {type:"number", min:"0", max:"59", step:"5", value:String(minutesVal%60), style:"text-align:center"});
+  customRow.appendChild(h("div", null, h("label",{class:"field-label"},"Heures"), hoursIn));
+  customRow.appendChild(h("div", null, h("label",{class:"field-label"},"Minutes"), minsIn));
+  form.appendChild(customRow);
+
+  form.appendChild(h("label", {class:"field-label"}, "Section"));
+  var sectionSel = h("select", null,
+    h("option", {value:""}, "— Non précisée —"),
+    SECTIONS.map(function(s){ return h("option", {value:s, selected: s===draft.section?"selected":null}, s); })
+  );
+  form.appendChild(sectionSel);
+
+  form.appendChild(h("label", {class:"field-label"}, "Notes (RG, nom de l’affaire…)"));
+  var notesIn = h("textarea", null, draft.notes || "");
+  form.appendChild(notesIn);
+
+  var actions = h("div", {style:"margin-top:16px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    var m = (parseInt(hoursIn.value,10)||0)*60 + (parseInt(minsIn.value,10)||0);
+    var entry = { id:draft.id, date:dateInput.value||todayISO(), nature:natureSel.value, minutes:m, section:sectionSel.value, notes:notesIn.value.trim() };
+    if(isEdit){
+      state.vacations = state.vacations.map(function(v){ return v.id===entry.id ? entry : v; });
+    } else {
+      state.vacations.push(entry);
+    }
+    vacViewMonth = monthKey(entry.date);
+    saveState(); closeSheet(); render("vacations");
+    toast(isEdit ? "Vacation modifiée." : "Vacation ajoutée.");
+  }}, isEdit ? "Enregistrer les modifications" : "Ajouter la vacation"));
+  if(isEdit){
+    actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
+      state.vacations = state.vacations.filter(function(v){ return v.id!==draft.id; });
+      saveState(); closeSheet(); render("vacations"); toast("Vacation supprimée.");
+    }}, "Supprimer cette vacation"));
+  }
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
+  form.appendChild(actions);
+
+  openSheet(isEdit ? "Modifier la vacation" : "Nouvelle vacation", form);
+}
+
+renderers.vacations = function(root){
+  var entries = state.vacations.filter(function(v){ return monthKey(v.date)===vacViewMonth; }).sort(function(a,b){ return a.date<b.date?-1:1; });
+  var total = entries.reduce(function(s,v){ return s+v.minutes; }, 0);
+
+  root.appendChild(h("p", {class:"lede"}, "Enregistrez vos vacations au fil de l’eau. En fin de mois, générez le relevé prêt à transmettre au greffe."));
+
+  var nav = h("div", {class:"btn-row", style:"align-items:center;margin-bottom:14px"},
+    h("button", {class:"sheet-btn ghost small", onclick:function(){
+      vacViewMonth=shiftMonthKey(vacViewMonth,-1);
+      render("vacations");
+    }}, "←"),
+    h("div", {style:"flex:1;text-align:center;font-weight:600;font-size:.88rem"}, monthLabel(vacViewMonth)),
+    h("button", {class:"sheet-btn ghost small", onclick:function(){
+      vacViewMonth=shiftMonthKey(vacViewMonth,1);
+      render("vacations");
+    }}, "→")
+  );
+  root.appendChild(nav);
+
+  root.appendChild(h("div", {class:"stat-row", style:"margin-bottom:16px"},
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(entries.length)), h("div", {class:"l"}, "Vacations")),
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, minutesLabel(total)), h("div", {class:"l"}, "Total du mois"))
+  ));
+
+  var panel = h("div", {class:"panel"});
+  if(entries.length===0){
+    panel.appendChild(h("p", {class:"lede", style:"margin:0"}, "Aucune vacation enregistrée pour ce mois."));
+  } else {
+    entries.forEach(function(v){
+      panel.appendChild(h("div", {class:"row-click", onclick:function(){ openVacationForm(v); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, natureLabel(v.nature)),
+          h("div", {class:"rc-sub"}, parseISODate(v.date).toLocaleDateString("fr-FR", {weekday:"short", day:"numeric", month:"short"}) + (v.section ? " · "+v.section : "") + (v.notes ? " · "+v.notes : ""))
+        ),
+        h("div", {class:"rc-val"}, minutesLabel(v.minutes))
+      ));
+    });
+  }
+  root.appendChild(panel);
+
+  root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){ openVacationForm(null); }},
+    "+ Ajouter une vacation"));
+
+  root.appendChild(h("div", {class:"section-title"}, "Relevé du mois"));
+  root.appendChild(h("p", {class:"lede"}, "Génère un aperçu imprimable (à enregistrer en PDF depuis la boîte de dialogue d’impression) et, si disponible sur cet appareil, un export CSV pour votre tableur."));
+  var exportRow = h("div", {class:"btn-row"});
+  exportRow.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){ printVacations(vacViewMonth, entries, total); }}, "Aperçu / Imprimer"));
+  exportRow.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){ exportVacationsCSV(vacViewMonth, entries); }}, "Export CSV"));
+  root.appendChild(exportRow);
+
+  root.appendChild(h("div", {class:"footnote"}, "Document généré automatiquement à partir de vos saisies — à vérifier avant transmission au greffe. Les durées indemnisables sont fixées par le Code du travail ; consultez le texte en vigueur pour toute question de plafond."));
+};
+
+function printVacations(mKey, entries, total){
+  var area = document.getElementById("print-area");
+  clear(area);
+  area.appendChild(h("h1", null, "Relevé de vacations — "+monthLabel(mKey)));
+  area.appendChild(h("h2", null, (state.profile.name||"Conseiller(ère) prud’homal(e)") + (state.profile.cph ? " · "+state.profile.cph : "") + (state.profile.section ? " · Section "+state.profile.section : "")));
+  var table = h("table", null,
+    h("thead", null, h("tr", null, h("th",null,"Date"), h("th",null,"Nature"), h("th",null,"Durée"), h("th",null,"Section"), h("th",null,"Notes"))),
+    h("tbody", null, entries.map(function(v){
+      return h("tr", null,
+        h("td", null, parseISODate(v.date).toLocaleDateString("fr-FR")),
+        h("td", null, natureLabel(v.nature)),
+        h("td", null, minutesLabel(v.minutes)),
+        h("td", null, v.section||"—"),
+        h("td", null, v.notes||"—")
+      );
+    }))
+  );
+  area.appendChild(table);
+  area.appendChild(h("p", {style:"margin-top:12px;font-size:12px"}, "Total du mois : "+minutesLabel(total)+" — "+entries.length+" vacation(s)."));
+  area.appendChild(h("p", {style:"margin-top:24px;font-size:10px;color:#666"}, "Document généré le "+new Date().toLocaleDateString("fr-FR")+" — à vérifier avant transmission au greffe."));
+  setTimeout(function(){ window.print(); }, 50);
+}
+
+function exportVacationsCSV(mKey, entries){
+  var lines = ["Date;Nature;Duree (min);Section;Notes"];
+  entries.forEach(function(v){
+    var notes = (v.notes||"").replace(/;/g,",").replace(/[\r\n]+/g," ");
+    var row = [v.date, natureLabel(v.nature), String(v.minutes), v.section||"", notes];
+    lines.push(row.join(";"));
+  });
+  var csv = "\uFEFF"+lines.join("\r\n");
+  saveFile("vacations-"+mKey, "csv", "txt", csv);
+}
+
+/* =================================================================
+   ÉCRAN — GUIDE (BJ / BCO, moteur commun)
+   ================================================================= */
+function renderRefChip(refId){
+  var r = REF_TEXTS.filter(function(x){ return x.id===refId; })[0];
+  if(!r) return null;
+  return h("button", {class:"ref-chip", onclick:function(){ go("refs"); setTimeout(function(){ focusRef(refId); }, 30); }}, r.code);
+}
+
+function renderBlocks(blocks, stepId){
+  var wrap = h("div", null);
+  blocks.forEach(function(b){
+    if(b.t==="p"){ wrap.appendChild(h("p", {style:"font-size:.88rem;line-height:1.55;margin:8px 0"}, b.v)); }
+    else if(b.t==="ul"){
+      wrap.appendChild(h("ul", {style:"margin:8px 0;padding-left:20px;font-size:.86rem;line-height:1.6;color:var(--text)"},
+        b.v.map(function(li){ return h("li", null, li); })));
+    }
+    else if(b.t==="checklist"){
+      wrap.appendChild(h("div", {class:"checklist-box"}, b.v.map(function(item){ return renderChecklistItem(stepId, item); })));
+    }
+    else if(b.t==="quote"){ wrap.appendChild(h("div", {class:"quote-block"}, "« "+b.v+" »", h("span", {class:"copy-mini", onclick:function(){ copyText(b.v); }}, "Copier"))); }
+    else if(b.t==="note"){ wrap.appendChild(h("div", {class:"note-block"}, b.v)); }
+    else if(b.t==="refs"){ wrap.appendChild(h("div", {class:"refs-row"}, b.v.map(renderRefChip))); }
+    else if(b.t==="subcase"){
+      var sc = h("div", {class:"subcase"}, h("div", {class:"subcase-title"}, b.title),
+        h("div", {class:"checklist-box"}, b.v.map(function(item){ return renderChecklistItem(stepId, item); })));
+      if(b.refs) sc.appendChild(h("div", {class:"refs-row"}, b.refs.map(renderRefChip)));
+      wrap.appendChild(sc);
+    }
+  });
+  return wrap;
+}
+function renderChecklistItem(stepId, label){
+  var itemKey = stepId+"::"+label;
+  var checked = getGuideState().checked.indexOf(itemKey)!==-1;
+  var row = h("label", {class:"checklist-item"+(checked?" checked":"")},
+    h("input", {type:"checkbox", checked: checked?"checked":null, onchange:function(e){
+      var gs = getGuideState();
+      var idx = gs.checked.indexOf(itemKey);
+      if(e.target.checked && idx===-1) gs.checked.push(itemKey);
+      if(!e.target.checked && idx!==-1) gs.checked.splice(idx,1);
+      saveState();
+      row.classList.toggle("checked", e.target.checked);
+      updateGuideProgress();
+    }}),
+    h("span", null, label)
+  );
+  return row;
+}
+
+var currentGuide = "bj";
+function getGuideState(){ return currentGuide==="bj" ? state.bj : state.bco; }
+function getGuideSteps(){ return currentGuide==="bj" ? BJ_STEPS : BCO_STEPS; }
+
+function stepItemKeys(step){
+  var keys=[];
+  step.blocks.forEach(function(b){
+    if(b.t==="checklist") b.v.forEach(function(item){ keys.push(step.id+"::"+item); });
+    if(b.t==="subcase") b.v.forEach(function(item){ keys.push(step.id+"::"+item); });
+  });
+  return keys;
+}
+function updateGuideProgress(){
+  var steps = getGuideSteps(); var gs = getGuideState();
+  var totalKeys=0, doneKeys=0;
+  steps.forEach(function(step){
+    var keys = stepItemKeys(step);
+    totalKeys += keys.length;
+    var done = keys.filter(function(k){ return gs.checked.indexOf(k)!==-1; }).length;
+    doneKeys += done;
+    var card = document.getElementById("stepcard-"+step.id);
+    if(card) card.classList.toggle("done", keys.length>0 && done===keys.length);
+  });
+  var fill = document.getElementById("guide-progress-fill");
+  var label = document.getElementById("guide-progress-label");
+  if(fill) fill.style.width = (totalKeys ? Math.round(doneKeys/totalKeys*100) : 0)+"%";
+  if(label) label.textContent = doneKeys+" / "+totalKeys+" points vérifiés";
+}
+
+function renderGuide(root, guideKey){
+  currentGuide = guideKey;
+  var steps = getGuideSteps();
+  var gs = getGuideState();
+
+  if(guideKey==="bco"){
+    root.appendChild(h("div", {class:"banner"},
+      h("span", {class:"attn-pulse"}),
+      h("span", null, h("b", null, "Brouillon à valider. "), "Cette trame est une base générique, non issue d’un document source vérifié. Envoyez-moi votre propre fil rouge « Présider un BCO » (comme celui fourni pour le BJ) pour que je le remplace par un contenu précis et sourcé.")
+    ));
+  }
+
+  root.appendChild(h("div", {class:"panel", style:"margin-bottom:16px"},
+    h("div", {style:"display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px"},
+      h("span", {style:"font-size:.8rem;font-weight:600"}, "Progression de l’audience"),
+      h("span", {id:"guide-progress-label", style:"font-size:.74rem;color:var(--text-muted)"}, "")
+    ),
+    h("div", {class:"progress-track"}, h("div", {id:"guide-progress-fill", class:"progress-fill", style:"width:0%"})),
+    h("button", {class:"sheet-btn ghost small", style:"margin-top:12px", onclick:function(){
+      openSheet("Nouvelle audience", h("div", null,
+        h("p", {class:"lede"}, "Cela remet à zéro les cases cochées pour ce guide. Utile en début de nouvelle audience."),
+        h("button", {class:"sheet-btn danger", onclick:function(){
+          gs.checked=[]; gs.startedAt=new Date().toISOString(); saveState(); closeSheet(); render(guideKey);
+        }}, "Réinitialiser la progression"),
+        h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+      ));
+    }}, "Nouvelle audience")
+  ));
+
+  steps.forEach(function(step, i){
+    var card = h("div", {class:"step-card", id:"stepcard-"+step.id});
+    var body = h("div", {class:"step-body"});
+    body.appendChild(renderBlocks(step.blocks, step.id));
+    var head = h("div", {class:"step-head", onclick:function(){
+      card.classList.toggle("open");
+    }},
+      h("div", {class:"step-num"}, String(i+1)),
+      h("h3", null, step.title),
+      icon("ic-chev", "chev")
+    );
+    card.appendChild(head); card.appendChild(body);
+    root.appendChild(card);
+  });
+
+  setTimeout(updateGuideProgress, 0);
+}
+renderers.bj = function(root){ renderGuide(root, "bj"); };
+renderers.bco = function(root){ renderGuide(root, "bco"); };
+
+/* =================================================================
+   ÉCRAN — TEXTES DE RÉFÉRENCE
+   ================================================================= */
+function focusRef(refId){
+  var el = document.getElementById("ref-"+refId);
+  if(!el) return;
+  el.scrollIntoView({behavior:"smooth", block:"center"});
+  el.classList.add("open");
+  el.style.boxShadow = "0 0 0 2px var(--accent)";
+  setTimeout(function(){ el.style.boxShadow=""; }, 1400);
+}
+renderers.refs = function(root){
+  var searchWrap = h("div", {class:"search-wrap"}, icon("ic-search"), h("input", {type:"text", placeholder:"Rechercher un article, un mot-clé…", id:"refs-search"}));
+  root.appendChild(searchWrap);
+  var list = h("div", null);
+  root.appendChild(list);
+
+  function draw(query){
+    clear(list);
+    var q = (query||"").toLowerCase();
+    var filtered = REF_TEXTS.filter(function(r){
+      return !q || r.code.toLowerCase().indexOf(q)!==-1 || r.title.toLowerCase().indexOf(q)!==-1 || r.text.toLowerCase().indexOf(q)!==-1;
+    });
+    if(filtered.length===0){ list.appendChild(h("p", {class:"lede"}, "Aucun résultat.")); return; }
+    filtered.forEach(function(r){
+      var card = h("div", {class:"step-card", id:"ref-"+r.id});
+      var head = h("div", {class:"step-head", onclick:function(){ card.classList.toggle("open"); }},
+        h("div", null,
+          h("div", {style:"font-family:var(--font-mono);font-size:.72rem;color:var(--accent-2);font-weight:700"}, r.code),
+          h("h3", {style:"font-size:.92rem;margin-top:2px"}, r.title)
+        ),
+        icon("ic-chev", "chev")
+      );
+      var body = h("div", {class:"step-body"},
+        h("p", {style:"font-size:.86rem;line-height:1.6"}, r.text),
+        h("button", {class:"sheet-btn ghost small", style:"margin-top:10px", onclick:function(e){ e.stopPropagation(); copyText(r.text); }}, "Copier le texte")
+      );
+      card.appendChild(head); card.appendChild(body);
+      list.appendChild(card);
+    });
+  }
+  draw("");
+  document.getElementById("refs-search").addEventListener("input", function(e){ draw(e.target.value); });
+};
+
+/* =================================================================
+   ÉCRAN — PHRASES RITUELLES
+   ================================================================= */
+renderers.phrases = function(root){
+  root.appendChild(h("p", {class:"lede"}, "Les formules à annoncer aux moments clés de l’audience, regroupées par phase."));
+  var phases = Array.from(new Set(PHRASES.map(function(p){ return p.phase; })));
+  phases.forEach(function(phase){
+    root.appendChild(h("div", {class:"section-title"}, phase));
+    var panel = h("div", {class:"panel"});
+    PHRASES.filter(function(p){ return p.phase===phase; }).forEach(function(p){
+      panel.appendChild(h("div", {class:"quote-block", style:"margin:8px 0"}, "« "+p.text+" »",
+        h("span", {class:"copy-mini", onclick:function(){ copyText(p.text); }}, "Copier")));
+    });
+    root.appendChild(panel);
+  });
+};
+
+/* =================================================================
+   ÉCRAN — RÉGLAGES
+   ================================================================= */
+renderers.settings = function(root){
+  root.appendChild(h("div", {class:"section-title"}, "Votre profil"));
+  root.appendChild(h("div", {class:"panel"},
+    h("label", {class:"field-label"}, "Nom du conseiller"),
+    h("input", {type:"text", value:state.profile.name, oninput:function(e){ state.profile.name=e.target.value; saveState(); }}),
+    h("label", {class:"field-label"}, "Conseil de prud’hommes"),
+    h("input", {type:"text", value:state.profile.cph, placeholder:"Ex. Conseil de prud’hommes de Béziers", oninput:function(e){ state.profile.cph=e.target.value; saveState(); }}),
+    h("label", {class:"field-label"}, "Section"),
+    h("select", {onchange:function(e){ state.profile.section=e.target.value; saveState(); }},
+      h("option", {value:""}, "— Non précisée —"),
+      SECTIONS.map(function(s){ return h("option", {value:s, selected: s===state.profile.section?"selected":null}, s); }))
+  ));
+
+  root.appendChild(h("div", {class:"section-title"}, "Apparence"));
+  var themePanel = h("div", {class:"panel"});
+  var themeChips = h("div", {class:"chip-row"});
+  [["system","Système"],["light","Clair"],["dark","Sombre"]].forEach(function(pair){
+    var c = h("span", {class:"chip"+(state.theme===pair[0]?" active":""), onclick:function(){
+      state.theme=pair[0]; saveState(); applyTheme();
+      Array.prototype.forEach.call(themeChips.children, function(el){ el.classList.remove("active"); });
+      c.classList.add("active");
+    }}, pair[1]);
+    themeChips.appendChild(c);
+  });
+  themePanel.appendChild(themeChips);
+  root.appendChild(themePanel);
+
+  root.appendChild(h("div", {class:"section-title"}, "Vos données"));
+  root.appendChild(h("p", {class:"lede"}, "Tout est enregistré uniquement sur cet appareil, sans serveur. Exportez régulièrement une sauvegarde pour ne rien perdre si vous changez d’appareil ou videz les données du navigateur."));
+  var dataPanel = h("div", {class:"panel"});
+  dataPanel.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    var data = JSON.stringify(state, null, 2);
+    saveFile("cph-toolbox-sauvegarde-"+todayISO(), "json", null, data);
+  }}, "Exporter une sauvegarde (JSON)"));
+  var fileIn = h("input", {type:"file", accept:"application/json", style:"display:none", onchange:function(e){
+    var file = e.target.files[0]; if(!file) return;
+    var reader = new FileReader();
+    reader.onload = function(){
+      try{
+        var parsed = JSON.parse(reader.result);
+        openSheet("Importer la sauvegarde", h("div", null,
+          h("p", {class:"lede"}, "Cela remplacera toutes les données actuellement enregistrées sur cet appareil par celles du fichier importé. Cette action est irréversible."),
+          h("button", {class:"sheet-btn danger", onclick:function(){
+            state = migrate(parsed); saveState(); closeSheet(); toast("Sauvegarde importée."); render("settings");
+          }}, "Remplacer mes données"),
+          h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+        ));
+      }catch(err){ toast("Fichier illisible — vérifiez qu’il s’agit bien d’une sauvegarde JSON."); }
+    };
+    reader.readAsText(file);
+    e.target.value="";
+  }});
+  dataPanel.appendChild(fileIn);
+  dataPanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){ fileIn.click(); }}, "Importer une sauvegarde"));
+  dataPanel.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
+    openSheet("Réinitialiser", h("div", null,
+      h("p", {class:"lede"}, "Toutes vos vacations, votre progression et votre profil seront définitivement supprimés de cet appareil."),
+      h("button", {class:"sheet-btn danger", onclick:function(){
+        state = clone(DEFAULT_STATE); saveState(); applyTheme(); closeSheet(); toast("Données réinitialisées."); render("home");
+      }}, "Tout réinitialiser"),
+      h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+    ));
+  }}, "Réinitialiser toutes les données"));
+  root.appendChild(dataPanel);
+
+  root.appendChild(h("div", {class:"footnote"}, "Boîte à outils réalisée pour les conseillers prud’homaux, dans l’esprit du guide « Présider un BJ ». Les textes de loi reproduits le sont à titre pratique — vérifiez toujours leur version en vigueur sur Légifrance avant toute décision."));
+};
+
+window.__cph = { h:h, icon:icon, clear:clear, toast:toast, openSheet:openSheet, closeSheet:closeSheet, copyText:copyText,
+  state:state, saveState:saveState, go:go, goBack:goBack, render:render, renderers:renderers,
+  NATURES:NATURES, SECTIONS:SECTIONS, DURATIONS:DURATIONS, REF_TEXTS:REF_TEXTS, PHRASES:PHRASES,
+  BJ_STEPS:BJ_STEPS, BCO_STEPS:BCO_STEPS, uid:uid, todayISO:todayISO, saveFile:saveFile, downloadsReady:downloadsReady,
+  applyTheme:applyTheme };
+
+render("home");
+
+})();
+</script>
+
+<script>
+if("serviceWorker" in navigator){
+  window.addEventListener("load", function(){
+    navigator.serviceWorker.register("./service-worker.js").catch(function(){});
+  });
+}
+</script>
+
+</body>
+</html>
