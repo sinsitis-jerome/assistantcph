@@ -1,0 +1,177 @@
+<title>Confidentialité — Mon Assistant CPH</title>
+<style>
+  :root{
+    --bg:#F3F1EC;
+    --surface:#FFFFFF;
+    --ink:#1C2024;
+    --ink-soft:#5B564D;
+    --line:#E4DFD3;
+    --accent:#B08A4E;
+    --accent-ink:#6B5326;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#171511;
+      --surface:#211E19;
+      --ink:#F1EEE6;
+      --ink-soft:#B9B2A3;
+      --line:#3A342A;
+      --accent:#D3AE71;
+      --accent-ink:#EAD6AC;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#171511;
+    --surface:#211E19;
+    --ink:#F1EEE6;
+    --ink-soft:#B9B2A3;
+    --line:#3A342A;
+    --accent:#D3AE71;
+    --accent-ink:#EAD6AC;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Source Sans 3","Segoe UI",system-ui,-apple-system,sans-serif;
+    line-height:1.6;
+  }
+  .wrap{
+    max-width:720px;
+    margin:0 auto;
+    padding:64px 24px 96px;
+  }
+  .eyebrow{
+    display:inline-block;
+    font-family:"Fraunces","Iowan Old Style",Georgia,serif;
+    font-style:italic;
+    font-size:0.95rem;
+    color:var(--accent-ink);
+    letter-spacing:0.02em;
+    margin-bottom:8px;
+  }
+  h1{
+    font-family:"Fraunces","Iowan Old Style",Georgia,serif;
+    font-weight:600;
+    font-size:2.1rem;
+    line-height:1.2;
+    text-wrap:balance;
+    margin:0 0 6px;
+  }
+  .updated{
+    color:var(--ink-soft);
+    font-size:0.9rem;
+    margin:0 0 40px;
+  }
+  .card{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:28px 32px;
+    margin:0 0 28px;
+  }
+  .lead{
+    font-size:1.05rem;
+    margin:0;
+  }
+  h2{
+    font-family:"Fraunces","Iowan Old Style",Georgia,serif;
+    font-weight:600;
+    font-size:1.25rem;
+    margin:40px 0 12px;
+  }
+  h2:first-of-type{margin-top:0;}
+  p{margin:0 0 14px; color:var(--ink);}
+  p.soft{color:var(--ink-soft);}
+  ul{margin:0 0 14px; padding-left:1.2em;}
+  li{margin-bottom:8px;}
+  .tag{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    background:color-mix(in srgb, var(--accent) 16%, transparent);
+    color:var(--accent-ink);
+    border-radius:999px;
+    padding:4px 12px;
+    font-size:0.85rem;
+    font-weight:600;
+    margin:0 8px 8px 0;
+  }
+  .tag::before{content:"✓";}
+  .contact{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px 24px;
+    align-items:baseline;
+  }
+  .contact dt{
+    font-weight:600;
+    color:var(--ink-soft);
+    font-size:0.85rem;
+    text-transform:uppercase;
+    letter-spacing:0.04em;
+    width:100%;
+  }
+  .contact dd{margin:0;}
+  footer{
+    margin-top:48px;
+    padding-top:20px;
+    border-top:1px solid var(--line);
+    font-size:0.85rem;
+    color:var(--ink-soft);
+  }
+  a{color:var(--accent-ink);}
+</style>
+
+<div class="wrap">
+  <span class="eyebrow">Mon Assistant CPH</span>
+  <h1>Politique de confidentialité</h1>
+  <p class="updated">Dernière mise à jour : 28 août 2026</p>
+
+  <div class="card">
+    <p class="lead">Mon Assistant CPH ne collecte, ne transmet et ne vend aucune donnée personnelle. Tout ce que vous saisissez reste exclusivement sur votre appareil.</p>
+  </div>
+
+  <div>
+    <span class="tag">Aucun serveur</span>
+    <span class="tag">Aucun compte</span>
+    <span class="tag">Aucune publicité</span>
+    <span class="tag">Aucun traceur</span>
+    <span class="tag">Aucun partage à des tiers</span>
+  </div>
+
+  <h2>Ce qu'est l'application</h2>
+  <p>Mon Assistant CPH est un outil destiné aux conseillers prud'homaux : suivi des vacations, guides d'audience (bureau de jugement, bureau de conciliation et d'orientation), textes de référence et phrases rituelles. Elle fonctionne comme une application web installable (PWA), sans connexion à un serveur applicatif.</p>
+
+  <h2>Données traitées et lieu de stockage</h2>
+  <p>Les informations que vous saisissez — profil (nom, conseil de prud'hommes, section), relevés de vacations, progression dans les guides, signature manuscrite éventuelle — sont enregistrées uniquement dans le stockage local de votre navigateur ou de votre appareil (« localStorage »). Aucune de ces données n'est envoyée à un serveur, à l'éditeur de l'application ou à un tiers.</p>
+  <p>La signature manuscrite, si vous choisissez de l'ajouter dans les réglages, est enregistrée sous forme d'image dans ce même stockage local, dans le seul but d'apparaître sur vos relevés de vacations imprimés ou exportés par vous. Elle n'est jamais transmise ailleurs.</p>
+
+  <h2>Export et sauvegarde</h2>
+  <p>L'application permet d'exporter vos données (sauvegarde JSON, relevés en PDF/CSV) directement vers votre appareil. Ces exports sont initiés par vous et restent sous votre seule responsabilité et votre seul contrôle — l'application n'y a plus accès une fois le fichier créé.</p>
+
+  <h2>Suppression des données</h2>
+  <p>Vous pouvez à tout moment réinitialiser l'application depuis les réglages, ou supprimer les données du site depuis les paramètres de votre navigateur ou de votre appareil : cela efface immédiatement et définitivement toutes les informations stockées.</p>
+
+  <h2>Services tiers, publicité et suivi</h2>
+  <p>L'application n'intègre aucun outil d'analyse d'audience, aucune régie publicitaire et aucun traceur. Aucune donnée d'usage n'est collectée à des fins statistiques ou commerciales.</p>
+
+  <h2>Mineurs</h2>
+  <p class="soft">Cette application est un outil professionnel destiné aux conseillers prud'homaux ; elle n'est pas conçue pour être utilisée par des mineurs et ne collecte de toute façon aucune donnée, quel que soit l'âge de l'utilisateur.</p>
+
+  <h2>Modifications de cette politique</h2>
+  <p>Cette page pourra être mise à jour si l'application évolue. La date de dernière mise à jour figure en haut de cette page.</p>
+
+  <h2>Contact</h2>
+  <dl class="contact">
+    <dt>Éditeur</dt>
+    <dd>Application développée pour un usage professionnel par un conseiller prud'homal.</dd>
+    <dt>Courriel</dt>
+    <dd><a href="mailto:sinsitis@gmail.com">sinsitis@gmail.com</a></dd>
+  </dl>
+
+  <footer>
+    Mon Assistant CPH — application indépendante, sans lien avec le ministère de la Justice ni les conseils de prud'hommes.
+  </footer>
+</div>
