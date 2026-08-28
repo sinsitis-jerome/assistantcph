@@ -188,6 +188,22 @@
   .quick-link .ic svg{ width:18px; height:18px; }
   .quick-link .lbl{ font-size:.7rem; font-weight:600; text-align:center; line-height:1.2; }
 
+  .link-row{ text-decoration:none; color:inherit; -webkit-tap-highlight-color:transparent; }
+  .link-row .ic{
+    width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    background:var(--accent-glow); color:var(--accent-2); flex:none;
+  }
+  .link-row .ic svg{ width:18px; height:18px; }
+
+  .info-list .info-row{
+    display:flex; justify-content:space-between; align-items:center; gap:12px;
+    padding:9px 0; border-bottom:1px solid var(--divider); font-size:.88rem;
+  }
+  .info-list .info-row:last-child{ border-bottom:none; }
+  .info-list .info-label{ color:var(--text-muted); flex:none; }
+  .info-list .info-value{ font-weight:600; text-align:right; color:var(--text); text-decoration:none; }
+  a.info-value:hover{ text-decoration:underline; }
+
   .card-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; position:relative; z-index:1; }
   .tool-card{
     background:var(--panel); border:1px solid var(--divider); border-radius:var(--radius-lg);
@@ -196,6 +212,8 @@
     transition: transform .15s ease, box-shadow .15s ease;
   }
   .tool-card:active{ transform:scale(0.98); }
+  .tool-card.disabled{ cursor:not-allowed; opacity:.55; }
+  .tool-card.disabled:active{ transform:none; }
   .tool-card .ic{
     width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center;
     background:var(--accent-glow); color:var(--accent-2);
@@ -268,6 +286,12 @@
   .row-click .rc-title{ font-size:.9rem; font-weight:600; }
   .row-click .rc-sub{ font-size:.76rem; color:var(--text-muted); margin-top:2px; }
   .row-click .rc-val{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:.86rem; color:var(--text-muted); flex:none; }
+  .row-click.incomplete{ background:var(--red-glow); }
+  .row-click.incomplete .rc-title{ color:var(--red); }
+  .row-click.incomplete .rc-sub{ color:var(--red); }
+  .warn-blink{ display:inline-block; animation:blinkWarn 1s ease-in-out infinite; }
+  @keyframes blinkWarn{ 0%,100%{ opacity:1; } 50%{ opacity:.25; } }
+  @media (prefers-reduced-motion: reduce){ .warn-blink{ animation:none; } .sheet-btn.blink-red{ animation:none; } }
 
   .info-pastille{
     width:18px; height:18px; border-radius:50%; flex:none;
@@ -418,6 +442,7 @@
   <symbol id="ic-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.7 2.5 4.2 5.7 4.2 9s-1.5 6.5-4.2 9c-2.7-2.5-4.2-5.7-4.2-9s1.5-6.5 4.2-9z"/></symbol>
   <symbol id="ic-question" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.3 9.3a2.7 2.7 0 115 1.5c0 1.7-2.5 1.8-2.5 3.7"/><circle cx="12" cy="17.2" r="0.15" fill="currentColor" stroke="none"/></symbol>
   <symbol id="ic-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16h16"/><rect x="7.5" y="12.5" width="3" height="5"/><rect x="12.5" y="9" width="3" height="8.5"/><rect x="17.5" y="6" width="3" height="11.5"/></symbol>
+  <symbol id="ic-calendar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4M16 3v4"/></symbol>
 </svg>
 
 <div id="app">
@@ -484,6 +509,16 @@ var SECTIONS = ["Encadrement","Industrie","Commerce","Agriculture","Activités d
 var DEP_OPTIONS = [ {value:"domicile", label:"Domicile"}, {value:"entreprise", label:"Entreprise"}, {value:"sans_objet", label:"Sans objet"} ];
 
 var COLLEGES = ["Salarié","Employeur"];
+
+var PLANNING_TYPES = [
+  {id:"bj", label:"BJ"},
+  {id:"bco", label:"BCO"},
+  {id:"bco-mee", label:"BCO MEE"}
+];
+function planningTypeLabel(id){
+  var t = PLANNING_TYPES.filter(function(t){ return t.id===id; })[0];
+  return t ? t.label : id;
+}
 
 var CPH_AUTRE = "__autre__";
 
@@ -770,7 +805,7 @@ function isProfileComplete(p){
   if(p.cph===CPH_AUTRE && !p.cphAutre.trim()) return false;
   if(p.remunere===null) return false;
   if(p.remunere===true && p.poste===null) return false;
-  if(p.presidentSection===null || p.presidentCph===null || p.referiste===null) return false;
+  if(p.sectionRole===null || p.presidentCph===null || p.referiste===null) return false;
   return true;
 }
 function todayISO(){ var d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -780,18 +815,45 @@ var DEFAULT_STATE = {
   v:1,
   theme:"system",
   profile:{
-    prenom:"", nom:"", college:"", section:"", cph:"", cphAutre:"",
+    prenom:"", nom:"", tel:"", college:"", section:"", cph:"", cphAutre:"",
     remunere:null, poste:null, horaireDebut:"", horaireFin:"",
-    presidentSection:null, presidentCph:null, referiste:null,
+    sectionRole:null, presidentCph:null, referiste:null,
     annuaireUrl:"", cphWebUrl:"", vacationsEmail:"", presidentEmail:"",
     formationEnmUrl:"https://e-formation.enm.justice.fr/login/index.php",
     legifranceUrl:"https://www.legifrance.gouv.fr/",
     ensapUrl:"https://ensap.gouv.fr/web/accueilnonconnecte",
-    ritaReminders:false
+    ritaReminders:false,
+    /* Signature manuscrite (tracée au doigt/souris dans Réglages),
+       enregistrée en PNG data-URL. Vide = aucune signature enregistrée.
+       Apposée automatiquement, en complément de la mention de validation
+       horodatée, sur le relevé de vacations (RITA) généré — voir
+       buildVacationsCanvases / printVacations. */
+    signature:""
   },
   vacations:[],
   ritaSent:{},
   lastBackupAt:null,
+  sectionMembers:[],
+  sectionRoles:{
+    greffier:{prenom:"", nom:"", email:"", tel:""},
+    coPresident:{prenom:"", nom:"", email:"", tel:""}
+  },
+  planning:[],
+  /* Planning personnel d'un conseiller « simple » (sans droits de
+     présidence) : une copie en lecture seule, filtrée sur ses propres
+     audiences, importée depuis un fichier reçu de la présidence de
+     section (bouton « Partager avec la section »). Distinct de
+     sectionMembers/planning ci-dessus, qui restent réservés aux outils de
+     présidence. */
+  /* members : trombinoscope complet de la section (les deux collèges),
+     transmis avec le fichier de diffusion — sert au bouton « Notifier un
+     échange » (voir renderers["mon-planning"]) pour proposer la liste des
+     conseillers du même collège que soi, sans avoir à redemander l'accès
+     à « Acteurs de ma section » (réservé à la présidence). fromTel : le
+     numéro de téléphone de la présidence de section au moment de l'envoi
+     (state.profile.tel côté président), destinataire du SMS de
+     notification d'échange. */
+  myPlanning:{ importedAt:null, from:"", fromTel:"", section:"", cph:"", entries:[], members:[] },
   bj:{ checked:[], startedAt:null },
   bco:{ checked:[], startedAt:null }
 };
@@ -804,6 +866,7 @@ function migrate(parsed){
       var p = parsed.profile;
       s.profile.prenom = typeof p.prenom==="string" ? p.prenom : "";
       s.profile.nom = typeof p.nom==="string" ? p.nom : (typeof p.name==="string" ? p.name : "");
+      s.profile.tel = typeof p.tel==="string" ? p.tel : "";
       s.profile.college = COLLEGES.indexOf(p.college)!==-1 ? p.college : "";
       s.profile.section = SECTIONS.indexOf(p.section)!==-1 ? p.section : "";
       if(typeof p.cph==="string" && p.cph){
@@ -816,7 +879,19 @@ function migrate(parsed){
       var timeRe = /^([01]\d|2[0-3]):(00|30)$/;
       s.profile.horaireDebut = typeof p.horaireDebut==="string" && timeRe.test(p.horaireDebut) ? p.horaireDebut : "";
       s.profile.horaireFin = typeof p.horaireFin==="string" && timeRe.test(p.horaireFin) ? p.horaireFin : "";
-      s.profile.presidentSection = p.presidentSection===true ? true : (p.presidentSection===false ? false : null);
+      /* sectionRole remplace l'ancien booléen presidentSection (un seul
+         rôle possible : aucun / président / vice-président de section).
+         Compatibilité ascendante : un profil déjà enregistré avec l'ancien
+         booléen est automatiquement reclassé en "president" ou "none". */
+      if(["none","president","vice-president"].indexOf(p.sectionRole)!==-1){
+        s.profile.sectionRole = p.sectionRole;
+      } else if(p.presidentSection===true){
+        s.profile.sectionRole = "president";
+      } else if(p.presidentSection===false){
+        s.profile.sectionRole = "none";
+      } else {
+        s.profile.sectionRole = null;
+      }
       s.profile.presidentCph = p.presidentCph===true ? true : (p.presidentCph===false ? false : null);
       s.profile.referiste = p.referiste===true ? true : (p.referiste===false ? false : null);
       s.profile.annuaireUrl = typeof p.annuaireUrl==="string" ? p.annuaireUrl : "";
@@ -832,6 +907,7 @@ function migrate(parsed){
       s.profile.legifranceUrl = typeof p.legifranceUrl==="string" ? p.legifranceUrl : DEFAULT_STATE.profile.legifranceUrl;
       s.profile.ensapUrl = typeof p.ensapUrl==="string" ? p.ensapUrl : DEFAULT_STATE.profile.ensapUrl;
       s.profile.ritaReminders = p.ritaReminders===true;
+      s.profile.signature = (typeof p.signature==="string" && /^data:image\/png;base64,/.test(p.signature) && p.signature.length<400000) ? p.signature : "";
     }
     if(parsed.ritaSent && typeof parsed.ritaSent==="object"){
       var mKeyRe = /^\d{4}-\d{2}$/;
@@ -840,6 +916,89 @@ function migrate(parsed){
       });
     }
     s.lastBackupAt = typeof parsed.lastBackupAt==="string" ? parsed.lastBackupAt : null;
+    if(Array.isArray(parsed.sectionMembers)){
+      s.sectionMembers = parsed.sectionMembers.map(function(m){
+        return {
+          id: typeof m.id==="string" && m.id ? m.id : uid(),
+          nom: typeof m.nom==="string" ? m.nom : "",
+          prenom: typeof m.prenom==="string" ? m.prenom : "",
+          college: typeof m.college==="string" ? m.college : "",
+          syndicat: typeof m.syndicat==="string" ? m.syndicat : "",
+          email: typeof m.email==="string" ? m.email : "",
+          tel: typeof m.tel==="string" ? m.tel : ""
+        };
+      }).filter(function(m){ return m.nom || m.prenom || m.email || m.tel; });
+    }
+    if(parsed.sectionRoles && typeof parsed.sectionRoles==="object"){
+      ["greffier","coPresident"].forEach(function(key){
+        var r = parsed.sectionRoles[key];
+        if(r && typeof r==="object"){
+          s.sectionRoles[key] = {
+            prenom: typeof r.prenom==="string" ? r.prenom : "",
+            nom: typeof r.nom==="string" ? r.nom : "",
+            email: typeof r.email==="string" ? r.email : "",
+            tel: typeof r.tel==="string" ? r.tel : ""
+          };
+        }
+      });
+    }
+    if(Array.isArray(parsed.planning)){
+      var planningTypeIds = PLANNING_TYPES.map(function(t){ return t.id; });
+      var dateRe = /^\d{4}-\d{2}-\d{2}$/;
+      s.planning = parsed.planning.map(function(pl){
+        return {
+          id: typeof pl.id==="string" && pl.id ? pl.id : uid(),
+          type: planningTypeIds.indexOf(pl.type)!==-1 ? pl.type : "bj",
+          date: typeof pl.date==="string" && dateRe.test(pl.date) ? pl.date : "",
+          college: COLLEGES.indexOf(pl.college)!==-1 ? pl.college : "",
+          presidence: COLLEGES.indexOf(pl.presidence)!==-1 ? pl.presidence : "",
+          president: typeof pl.president==="string" && pl.president ? pl.president : null,
+          assesseurs: Array.isArray(pl.assesseurs) ? pl.assesseurs.filter(function(a){ return typeof a==="string" && a; }).slice(0,2) : [],
+          /* Identifiant d'origine conservé lorsque cette date provient d'un
+             import « Importer de l'autre collège » : permet de retrouver et
+             mettre à jour la même date lors d'un futur réimport, plutôt que
+             d'en créer un doublon (voir mergePlanningImport). */
+          importSourceId: typeof pl.importSourceId==="string" && pl.importSourceId ? pl.importSourceId : null
+        };
+      }).filter(function(pl){ return pl.date; });
+    }
+    if(parsed.myPlanning && typeof parsed.myPlanning==="object"){
+      var mp = parsed.myPlanning;
+      s.myPlanning.importedAt = typeof mp.importedAt==="string" ? mp.importedAt : null;
+      s.myPlanning.from = typeof mp.from==="string" ? mp.from : "";
+      s.myPlanning.fromTel = typeof mp.fromTel==="string" ? mp.fromTel : "";
+      s.myPlanning.section = typeof mp.section==="string" ? mp.section : "";
+      s.myPlanning.cph = typeof mp.cph==="string" ? mp.cph : "";
+      var myPlanningTypeIds = PLANNING_TYPES.map(function(t){ return t.id; });
+      var myPlanningDateRe = /^\d{4}-\d{2}-\d{2}$/;
+      function sanitizeNameObj(o){
+        return (o && typeof o==="object") ? { nom: typeof o.nom==="string" ? o.nom : "", prenom: typeof o.prenom==="string" ? o.prenom : "", college: COLLEGES.indexOf(o.college)!==-1 ? o.college : "" } : null;
+      }
+      s.myPlanning.entries = Array.isArray(mp.entries) ? mp.entries.map(function(e){
+        return {
+          type: myPlanningTypeIds.indexOf(e.type)!==-1 ? e.type : "bj",
+          date: typeof e.date==="string" && myPlanningDateRe.test(e.date) ? e.date : "",
+          college: COLLEGES.indexOf(e.college)!==-1 ? e.college : "",
+          presidence: COLLEGES.indexOf(e.presidence)!==-1 ? e.presidence : "",
+          president: sanitizeNameObj(e.president),
+          assesseurs: Array.isArray(e.assesseurs) ? e.assesseurs.map(sanitizeNameObj).filter(Boolean) : [],
+          role: e.role==="president" ? "president" : "assesseur"
+        };
+      }).filter(function(e){ return e.date; }) : [];
+      /* Trombinoscope complet transmis avec le fichier — sert au bouton
+         « Notifier un échange » (voir renderers["mon-planning"]) ; pas
+         d'identifiant, ce n'est qu'un instantané en lecture seule. */
+      s.myPlanning.members = Array.isArray(mp.members) ? mp.members.map(function(m){
+        return {
+          nom: typeof m.nom==="string" ? m.nom : "",
+          prenom: typeof m.prenom==="string" ? m.prenom : "",
+          college: COLLEGES.indexOf(m.college)!==-1 ? m.college : "",
+          syndicat: typeof m.syndicat==="string" ? m.syndicat : "",
+          email: typeof m.email==="string" ? m.email : "",
+          tel: typeof m.tel==="string" ? m.tel : ""
+        };
+      }).filter(function(m){ return m.nom || m.prenom; }) : [];
+    }
     if(Array.isArray(parsed.vacations)){
       var hmRe = /^([01]\d|2[0-3]):([0-5]\d)$/;
       s.vacations = parsed.vacations.map(function(v){
@@ -905,16 +1064,31 @@ var downloadsReady = (function(){
   return Promise.resolve(null);
 })();
 
-/* Repli lorsque le téléchargement direct n’est pas possible (capacité
-   absente sur cet appareil/navigateur, ou échec de l’enregistrement) :
-   on montre quand même le contenu, copiable en un clic, plutôt que de
-   laisser l’utilisateur les mains vides. */
-function showDownloadFallback(text){
+/* Dernier repli lorsque même le téléchargement automatique déclenché par
+   script (triggerFileDownload) échoue — cas rare (blob/URL indisponibles).
+   Quand un nom de fichier est fourni, on propose quand même un vrai lien
+   <a download> à activer soi-même (un geste utilisateur direct sur ce
+   lien passe parfois là où la tentative automatique, asynchrone, a été
+   bloquée) ; le contenu reste aussi copiable en un clic dans tous les cas,
+   utile pour le coller directement dans un email par exemple. */
+function showDownloadFallback(text, filename){
+  var downloadLink = null;
+  if(filename){
+    try{
+      var mime = /\.json$/i.test(filename) ? "application/json" : "text/plain";
+      var blob = new Blob([text], {type:mime});
+      var url = URL.createObjectURL(blob);
+      downloadLink = h("a", {href:url, download:filename, class:"sheet-btn primary", style:"display:block; text-align:center; text-decoration:none; box-sizing:border-box; margin-bottom:12px;"}, "Télécharger « "+filename+" »");
+    }catch(e){ downloadLink = null; }
+  }
   var ta = h("textarea", {readonly:"readonly", style:"min-height:240px; font-family:var(--font-mono); font-size:.76rem; white-space:pre;"}, text);
   openSheet("Téléchargement indisponible ici", h("div", null,
-    h("p", {class:"lede"}, "Le téléchargement direct n’est pas possible sur cet appareil. Copiez ce contenu ci-dessous et collez-le dans votre tableur ou votre traitement de texte. Vous pouvez aussi essayer Ctrl+P / Cmd+P sur cet écran pour l’imprimer directement."),
+    h("p", {class:"lede"}, downloadLink
+      ? "Le téléchargement automatique n’a pas fonctionné sur cet appareil. Essayez le bouton ci-dessous ; s’il ne fait toujours rien, faites un appui long (ou un clic droit) dessus puis « Enregistrer le lien sous ». Vous pouvez aussi copier le contenu ci-dessous et le coller dans un email ou un document."
+      : "Le téléchargement direct n’est pas possible sur cet appareil. Copiez ce contenu ci-dessous et collez-le dans votre tableur ou votre traitement de texte. Vous pouvez aussi essayer Ctrl+P / Cmd+P sur cet écran pour l’imprimer directement."),
+    downloadLink,
     ta,
-    h("button", {class:"sheet-btn primary", style:"margin-top:12px", onclick:function(){ copyText(text); }}, "Copier le contenu"),
+    h("button", {class:"sheet-btn "+(downloadLink?"ghost":"primary"), style:"margin-top:12px", onclick:function(){ copyText(text); }}, "Copier le contenu"),
     h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Fermer")
   ));
 }
@@ -929,7 +1103,14 @@ function saveFile(baseName, extPreferred, extFallback, contents, fallbackText){
   toast("Préparation du fichier…");
   downloadsReady.then(function(){
     if(!downloadsCap){
-      showDownloadFallback(fallbackText || contents);
+      /* Version hébergée hors Artifact (cas normal de l'app installée
+         depuis GitHub Pages) : pas de capacité "downloads" — on tente un
+         vrai téléchargement de fichier déclenché par script avant de se
+         rabattre sur le contenu copiable. */
+      var text1 = fallbackText || contents;
+      var name1 = baseName+"."+extPreferred;
+      if(triggerFileDownload(name1, text1)) toast("Fichier « "+name1+" » téléchargé.");
+      else showDownloadFallback(text1, name1);
       return;
     }
     downloadsCap.save({ filename: baseName+"."+extPreferred, data: contents }).then(function(){
@@ -942,11 +1123,19 @@ function saveFile(baseName, extPreferred, extFallback, contents, fallbackText){
            préféré (par ex. du HTML brut dans un fichier .md). */
         downloadsCap.save({ filename: baseName+"."+extFallback, data: (fallbackText!=null ? fallbackText : contents) }).then(function(){
           toast("Fichier « "+baseName+"."+extFallback+" » enregistré (format imprimable indisponible ici).");
-        }).catch(function(){ showDownloadFallback(fallbackText || contents); });
+        }).catch(function(){
+          var text2 = fallbackText!=null ? fallbackText : contents;
+          var name2 = baseName+"."+extFallback;
+          if(triggerFileDownload(name2, text2)) toast("Fichier « "+name2+" » téléchargé.");
+          else showDownloadFallback(text2, name2);
+        });
       } else if(err && err.code==="declined"){
         toast("Téléchargement annulé.");
       } else {
-        showDownloadFallback(fallbackText || contents);
+        var text3 = fallbackText || contents;
+        var name3 = baseName+"."+extPreferred;
+        if(triggerFileDownload(name3, text3)) toast("Fichier « "+name3+" » téléchargé.");
+        else showDownloadFallback(text3, name3);
       }
     });
   });
@@ -976,13 +1165,13 @@ function backupFileName(){
   return (nom ? "cph-sauvegarde-"+nom+"-"+iso : "cph-sauvegarde-"+iso) + ".json";
 }
 /* Repli lorsque la capacité "downloads" est absente (version hébergée
-   hors Artifact) : un vrai lien <a download> déclenché par script, qui
-   fonctionne dans un onglet de navigateur normal (inerte uniquement
-   dans le bac à sable de l'Artifact, où la capacité est de toute façon
-   disponible). */
-function triggerJsonDownload(filename, jsonText){
+   hors Artifact, cas normal pour l'application installée depuis GitHub
+   Pages) : un vrai lien <a download> déclenché par script, qui fonctionne
+   dans un onglet de navigateur normal (inerte uniquement dans le bac à
+   sable de l'Artifact, où la capacité est de toute façon disponible). */
+function triggerFileDownload(filename, text, mime){
   try{
-    var blob = new Blob([jsonText], {type:"application/json"});
+    var blob = new Blob([text], {type: mime || "application/octet-stream"});
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url; a.download = filename;
@@ -992,6 +1181,9 @@ function triggerJsonDownload(filename, jsonText){
     setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
     return true;
   }catch(e){ return false; }
+}
+function triggerJsonDownload(filename, jsonText){
+  return triggerFileDownload(filename, jsonText, "application/json");
 }
 function runBackup(isAuto){
   var filename = backupFileName();
@@ -1166,7 +1358,9 @@ var navStack = ["home"];
 var SCREEN_TITLES = {
   home:"Mon Assistant CPH", vacations:"Feuille de vacation", bj:"Présider un BJ",
   bco:"Présider un BCO", refs:"Textes de référence", phrases:"Phrases rituelles", settings:"Réglages",
-  "admin-section":"Administrer ma section", "admin-cph":"Administrer le CPH", stats:"Statistiques"
+  "admin-section":"Administrer ma section", "admin-cph":"Administrer le CPH", stats:"Statistiques",
+  "liens-utiles":"Liens utiles", "section-membres":"Acteurs de ma section",
+  "planification":"Outil de planification", "mon-planning":"Mon planning"
 };
 var renderers = {};
 
@@ -1254,8 +1448,7 @@ renderers.home = function(root){
 
   wrap.appendChild(h("div", {class:"hero"},
     h("div", {class:"eyebrow"}, "Conseil de prud’hommes"),
-    h("h1", null, state.profile.prenom ? "Bonjour, "+state.profile.prenom : "Votre assistant CPH"),
-    h("p", null, "Les repères et documents pratiques pour préparer, présider et clôturer vos audiences — tout reste enregistré sur cet appareil.")
+    h("h1", null, state.profile.prenom ? "Bonjour, "+state.profile.prenom : "Votre assistant CPH")
   ));
 
   function quickLink(icon_id, label, href){
@@ -1274,12 +1467,19 @@ renderers.home = function(root){
   var quickLinks = h("div", {class:"quick-links"},
     state.profile.annuaireUrl ? quickLink("ic-users", "Annuaire", state.profile.annuaireUrl) : null,
     state.profile.cphWebUrl ? quickLink("ic-globe", "Site web", state.profile.cphWebUrl) : null,
-    state.profile.presidentEmail ? quickLink("ic-question", "Question", "mailto:"+state.profile.presidentEmail) : null,
+    quickLinkAction("ic-calendar", "Mon planning", function(){ go("mon-planning"); }),
     quickLinkAction("ic-chart", "Statistiques", function(){ go("stats"); })
   );
   wrap.appendChild(quickLinks);
 
-  function card(icon_id, title, desc, screenId, badge, wide){
+  function card(icon_id, title, desc, screenId, badge, wide, disabled){
+    if(disabled){
+      return h("div", {class:"tool-card"+(wide?" wide":"")+" disabled", "aria-disabled":"true"},
+        badge,
+        h("div", {class:"ic"}, icon(icon_id)),
+        h("div", null, h("div", {class:"t"}, title), h("div", {class:"d"}, desc))
+      );
+    }
     return h("div", {class:"tool-card"+(wide?" wide":""), onclick:function(){ go(screenId); }, tabindex:"0",
         onkeydown:function(e){ if(e.key==="Enter") go(screenId); }},
       badge,
@@ -1289,13 +1489,14 @@ renderers.home = function(root){
   }
 
   var grid = h("div", {class:"card-grid"},
-    card("ic-clock", "Feuille de vacation", "Saisir vos vacations et générer le relevé du mois", "vacations"),
+    card("ic-clock", "Feuille de vacation", "Saisir vos vacations et générer le relevé du mois (RITA)", "vacations"),
     card("ic-scale", "Présider un BJ", "Le fil rouge complet, étape par étape", "bj"),
-    card("ic-handshake", "Présider un BCO", "Trame de conciliation et d’orientation", "bco", h("span",{class:"badge amber"},"Brouillon")),
+    card("ic-handshake", "Présider un BCO", "Rubrique en construction", "bco", h("span",{class:"badge amber"},"Brouillon"), false, true),
     card("ic-book", "Textes de référence", "Articles cités, recherche rapide", "refs"),
-    card("ic-quote", "Phrases rituelles", "Les formules à annoncer en audience", "phrases", null, true),
-    state.profile.presidentSection===true ? card("ic-users", "Administrer ma section", "Suivi et organisation de votre section", "admin-section", null, true) : null,
-    state.profile.presidentCph===true ? card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", null, true) : null
+    card("ic-quote", "Phrases rituelles", "Les formules fréquentes en audience", "phrases", null, true),
+    (state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president") ? card("ic-users", "Administrer ma section", "Outils présidence de section", "admin-section", null, true) : null,
+    state.profile.presidentCph===true ? card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", null, true) : null,
+    card("ic-globe", "Liens utiles", "Site web, annuaire, Formation ENM, Légifrance, ENSAP", "liens-utiles", null, true)
   );
   wrap.appendChild(grid);
 
@@ -1327,7 +1528,140 @@ function statsPeriodEmptyLabel(period){
   return "Aucune vacation enregistrée pour l’instant — les statistiques apparaîtront ici au fil de vos saisies.";
 }
 
+/* =================================================================
+   MODULE « MON ACTIVITÉ » (en tête de l'écran Statistiques)
+   Toujours sur l'année en cours. Les audiences « réalisées » viennent des
+   déclarations de vacations (seule source fiable de ce qui a vraiment eu
+   lieu) ; les audiences « à venir » et les présidences viennent du
+   planning — celui de l'Outil de planification pour un(e) président(e) de
+   section (ses propres audiences, reconnues via "__self__"), ou de « Mon
+   planning » pour un(e) conseiller(e) sans droits de présidence. Les deux
+   sources sont combinées : chacune est vide pour l'un des deux profils,
+   ce qui évite d'avoir à distinguer explicitement les deux cas ici.
+   ================================================================= */
+function currentYearStr(){ return todayISO().slice(0,4); }
+
+function myInvolvedPlanningEntries(){
+  var out = [];
+  (state.planning||[]).forEach(function(p){
+    var isPresident = p.president==="__self__";
+    var isAssesseur = (p.assesseurs||[]).indexOf("__self__")!==-1;
+    if(isPresident || isAssesseur){
+      out.push({ type:p.type, date:p.date, role: isPresident ? "president" : "assesseur" });
+    }
+  });
+  ((state.myPlanning && state.myPlanning.entries) || []).forEach(function(e){
+    out.push({ type:e.type, date:e.date, role:e.role });
+  });
+  return out;
+}
+
+var REDACTION_NATURE_IDS = NATURES.filter(function(n){ return n.isRedaction; }).map(function(n){ return n.id; });
+
+function computeMyActivityStats(){
+  var year = currentYearStr();
+  var today = todayISO();
+  var vacYear = state.vacations.filter(function(v){ return v.date && v.date.slice(0,4)===year; });
+  var planYear = myInvolvedPlanningEntries().filter(function(e){ return e.date && e.date.slice(0,4)===year; });
+  var planFuture = planYear.filter(function(e){ return e.date>=today; });
+  var planPast = planYear.filter(function(e){ return e.date<today; });
+
+  function vacCount(natureIds){ return vacYear.filter(function(v){ return natureIds.indexOf(v.nature)!==-1; }).length; }
+  function planCount(list, types){ return list.filter(function(e){ return types.indexOf(e.type)!==-1; }).length; }
+  function avgMinutes(list){
+    if(!list.length) return null;
+    return Math.round(list.reduce(function(s,v){ return s+(v.minutes||0); }, 0) / list.length);
+  }
+
+  var bjDone = vacCount(["audience-bj"]);
+  var bjUpcoming = planCount(planFuture, ["bj"]);
+  var bcoDone = vacCount(["audience-bco"]);
+  var bcoUpcoming = planCount(planFuture, ["bco","bco-mee"]);
+
+  var audiencesDone = bjDone + bcoDone;
+  var audiencesUpcoming = bjUpcoming + bcoUpcoming;
+
+  var audienceVacYear = vacYear.filter(function(v){ return v.nature==="audience-bj" || v.nature==="audience-bco"; });
+
+  var presidencesDone = planPast.filter(function(e){ return e.role==="president"; }).length;
+  var presidencesUpcoming = planFuture.filter(function(e){ return e.role==="president"; }).length;
+
+  var redactionVac = vacYear.filter(function(v){ return REDACTION_NATURE_IDS.indexOf(v.nature)!==-1; });
+
+  var inWorkTotal = 0, outWorkTotal = 0;
+  vacYear.forEach(function(v){
+    var sp = vacationSplit(v);
+    if(sp.inWork!=null) inWorkTotal += sp.inWork;
+    if(sp.outWork!=null) outWorkTotal += sp.outWork;
+  });
+
+  return {
+    year: year,
+    bjDone: bjDone, bjUpcoming: bjUpcoming, bjTotal: bjDone+bjUpcoming,
+    bcoDone: bcoDone, bcoUpcoming: bcoUpcoming, bcoTotal: bcoDone+bcoUpcoming,
+    audiencesDone: audiencesDone, audiencesUpcoming: audiencesUpcoming, audiencesTotal: audiencesDone+audiencesUpcoming,
+    avgAudienceMin: avgMinutes(audienceVacYear),
+    presidencesDone: presidencesDone, presidencesUpcoming: presidencesUpcoming, presidencesTotal: presidencesDone+presidencesUpcoming,
+    redactionsDone: redactionVac.length,
+    avgRedactionMin: avgMinutes(redactionVac),
+    inWorkTotal: inWorkTotal, outWorkTotal: outWorkTotal, workTotal: inWorkTotal+outWorkTotal
+  };
+}
+
+function renderMyActivity(root){
+  var s = computeMyActivityStats();
+
+  function panel(title, rows){
+    root.appendChild(h("div", {class:"section-title", style:"font-size:.92rem; margin:18px 0 8px;"}, title));
+    var info = h("div", {class:"info-list panel"});
+    rows.forEach(function(r){
+      info.appendChild(h("div", {class:"info-row"},
+        h("div", {class:"info-label"}, r[0]),
+        h("div", {class:"info-value"}, r[1])
+      ));
+    });
+    root.appendChild(info);
+  }
+
+  panel("BJ", [
+    ["Réalisés", String(s.bjDone)],
+    ["À venir", String(s.bjUpcoming)],
+    ["Total", String(s.bjTotal)]
+  ]);
+  panel("BCO (BCO MEE inclus)", [
+    ["Réalisés", String(s.bcoDone)],
+    ["À venir", String(s.bcoUpcoming)],
+    ["Total", String(s.bcoTotal)]
+  ]);
+  panel("Toutes audiences", [
+    ["Réalisées", String(s.audiencesDone)],
+    ["À venir", String(s.audiencesUpcoming)],
+    ["Total", String(s.audiencesTotal)],
+    ["Moyenne par conseiller de la section", "Bientôt disponible"],
+    ["Durée moyenne d’une audience", s.avgAudienceMin!=null ? minutesLabel(s.avgAudienceMin) : "—"]
+  ]);
+  panel("Présidences", [
+    ["Réalisées", String(s.presidencesDone)],
+    ["À venir", String(s.presidencesUpcoming)],
+    ["Total", String(s.presidencesTotal)]
+  ]);
+  panel("Rédactions", [
+    ["Réalisées", String(s.redactionsDone)],
+    ["Durée moyenne", s.avgRedactionMin!=null ? minutesLabel(s.avgRedactionMin) : "—"]
+  ]);
+  panel("Temps de travail déclaré", [
+    ["En temps de travail", minutesLabel(s.inWorkTotal)],
+    ["Hors temps de travail", minutesLabel(s.outWorkTotal)],
+    ["Total", minutesLabel(s.workTotal)]
+  ]);
+}
+
 renderers.stats = function(root){
+  root.appendChild(h("div", {class:"section-title"}, "Mon activité"));
+  root.appendChild(h("p", {class:"lede"}, "Chiffres calculés sur l’année en cours ("+currentYearStr()+") à partir de vos déclarations de vacations et de votre planning (Outil de planification, ou Mon planning si vous n’avez pas de droits de présidence)."));
+  renderMyActivity(root);
+
+  root.appendChild(h("div", {class:"section-title", style:"margin-top:8px;"}, "Vacations déclarées"));
   var vacations = state.vacations;
   if(vacations.length===0){
     root.appendChild(h("div", {class:"init-empty"},
@@ -1419,6 +1753,9 @@ function shiftMonthKey(key, delta){
 }
 function parseISODate(str){ var p=str.split("-"); return new Date(Number(p[0]), Number(p[1])-1, Number(p[2])); }
 var vacViewMonth = monthKey(todayISO());
+var planningViewType = "bj";
+var planningLastRealType = "bj";
+var planningViewMonth = monthKey(todayISO());
 
 function natureLabel(id){ var n=NATURES.filter(function(x){return x.id===id;})[0]; return n ? n.label : id; }
 function depLabel(v){ var o=DEP_OPTIONS.filter(function(x){return x.value===v;})[0]; return o ? o.label : ""; }
@@ -2007,7 +2344,26 @@ function wrapCanvasText(ctx, text, maxWidth, maxLines){
   return lines.length ? lines : ["—"];
 }
 
-function buildVacationsCanvases(mKey, entries, total){
+/* Charge (et met en cache) l'image de la signature enregistrée, sous forme
+   d'un HTMLImageElement prêt à être dessiné dans un <canvas> — nécessaire
+   car canvas.drawImage exige une image déjà décodée, contrairement à une
+   simple balise <img src="data:..."> dans un document HTML classique
+   (voir printVacations, qui n'a pas besoin de ce détour). Résout null si
+   aucune signature n'est enregistrée ou si le décodage échoue. */
+var signatureImgCache = null, signatureImgCacheSrc = null;
+function getSignatureImage(){
+  var src = state.profile.signature;
+  if(!src) return Promise.resolve(null);
+  if(signatureImgCache && signatureImgCacheSrc === src) return Promise.resolve(signatureImgCache);
+  return new Promise(function(resolve){
+    var img = new Image();
+    img.onload = function(){ signatureImgCache = img; signatureImgCacheSrc = src; resolve(img); };
+    img.onerror = function(){ resolve(null); };
+    img.src = src;
+  });
+}
+
+function buildVacationsCanvases(mKey, entries, total, signatureImg){
   var titleTxt = "Relevé de vacations — "+monthLabel(mKey);
   var cphDisp = cphLabel(state.profile);
   var subTxt = (fullName(state.profile)||"Conseiller(ère) prud’homal(e)") + (cphDisp ? " · CPH de "+cphDisp : "") + (state.profile.section ? " · Section "+state.profile.section : "");
@@ -2037,7 +2393,8 @@ function buildVacationsCanvases(mKey, entries, total){
   measureCtx.font = "400 15px "+sans;
   var infoLines = infoTxt ? wrapCanvasText(measureCtx, infoTxt, contentW, 2) : [];
 
-  var headerBlockH = 68 + (infoLines.length ? 22+infoLines.length*20 : 0), footerBlockH = 150, tableHeaderRowH = 46;
+  var sigMaxW = 200, sigMaxH = 64, sigReserve = signatureImg ? sigMaxH+24 : 0;
+  var headerBlockH = 68 + (infoLines.length ? 22+infoLines.length*20 : 0), footerBlockH = 150+sigReserve, tableHeaderRowH = 46;
   var availH = A4_IMG_H - margin*2 - headerBlockH - footerBlockH;
 
   var rowH = 34, maxLines = 2;
@@ -2160,6 +2517,29 @@ function buildVacationsCanvases(mKey, entries, total){
     valLines.forEach(function(ln, li){ ctx.fillText(ln, valX+valW, valY + li*valLineH); });
     ctx.textAlign = "left";
 
+    /* Signature manuscrite, en plus de la mention de validation ci-dessus
+       (jamais à sa place) : image apposée juste au-dessus, alignée à
+       droite sur la même largeur. */
+    if(signatureImg){
+      var sigRatio = Math.min(sigMaxW/signatureImg.width, sigMaxH/signatureImg.height, 1);
+      var sigW = signatureImg.width*sigRatio, sigH = signatureImg.height*sigRatio;
+      var sigX = valX+valW-sigW;
+      /* valY est la ligne de base de la PREMIÈRE (donc la plus haute) ligne
+         du texte de validation ; on remonte d'un ascendant approximatif
+         (~13px pour cette police) plus une marge avant de poser la
+         signature au-dessus. */
+      var sigBottom = valY - 21;
+      var sigY = sigBottom - sigH;
+      ctx.drawImage(signatureImg, sigX, sigY, sigW, sigH);
+      ctx.strokeStyle = "#CFCBC2"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(sigX, sigBottom+2); ctx.lineTo(valX+valW, sigBottom+2); ctx.stroke();
+      ctx.fillStyle = "#999";
+      ctx.font = "400 10px "+sans;
+      ctx.textAlign = "right";
+      ctx.fillText("Signature du conseiller", valX+valW, sigY-6);
+      ctx.textAlign = "left";
+    }
+
     canvases.push(canvas);
   }
   return canvases;
@@ -2197,7 +2577,8 @@ function showImageFallback(blobs, mKey){
 
 function exportVacationsImage(mKey, entries, total){
   toast("Préparation de l’image…");
-  var canvases = buildVacationsCanvases(mKey, entries, total);
+  getSignatureImage().then(function(signatureImg){
+  var canvases = buildVacationsCanvases(mKey, entries, total, signatureImg);
   Promise.all(canvases.map(function(c){ return canvasToJpegBlob(c, 0.92); })).then(function(blobs){
     downloadsReady.then(function(){
       if(!downloadsCap){ showImageFallback(blobs, mKey); return; }
@@ -2217,6 +2598,7 @@ function exportVacationsImage(mKey, entries, total){
       }
       next();
     });
+  });
   });
 }
 
@@ -2262,6 +2644,9 @@ function printVacations(mKey, entries, total){
     + "th{background:#f2f2f2;}"
     + "p.total{margin-top:12px;font-size:13px;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;}"
     + "p.disclaimer{margin-top:24px;font-size:10px;color:#666;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;}"
+    + ".signature-block{margin-top:20px;text-align:right;}"
+    + ".signature-block img{display:inline-block;max-width:220px;max-height:90px;border-bottom:1px solid #999;padding-bottom:4px;}"
+    + ".signature-block p{margin:0 0 4px;font-size:10px;color:#666;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;}"
     + ".no-print{margin-top:24px;}"
     + ".no-print button{font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:14px;padding:10px 18px;border-radius:8px;border:1px solid #222;background:#111;color:#fff;cursor:pointer;}"
     + "@media print{ .no-print{ display:none; } }"
@@ -2274,6 +2659,7 @@ function printVacations(mKey, entries, total){
     + "<p class=\"total\">Total du mois : "+escapeHtml(minutesLabel(total))+" — "+entries.length+" vacation(s).</p>"
     + "<p class=\"disclaimer\">Aller / Retour : D = Domicile, E = Entreprise.</p>"
     + "<p class=\"disclaimer\">Document généré le "+escapeHtml(new Date().toLocaleDateString("fr-FR"))+" — à vérifier avant transmission au greffe. Les durées indemnisables sont fixées par le Code du travail ; consultez le texte en vigueur pour toute question de plafond.</p>"
+    + (state.profile.signature ? "<div class=\"signature-block\"><p>Signature du conseiller :</p><img src=\""+state.profile.signature+"\" alt=\"Signature\"></div>" : "")
     + "<div class=\"no-print\"><button onclick=\"window.print()\">Imprimer / Enregistrer en PDF</button></div>"
     + "</body></html>";
 
@@ -2525,16 +2911,2207 @@ function renderAdminPlaceholder(root, opts){
 }
 
 renderers["admin-section"] = function(root){
-  renderAdminPlaceholder(root, {
-    pronoun:"votre section",
-    intro:"Un espace pour piloter votre section — à construire ensemble.",
-    ideas:[
-      {title:"Conseillers de la section", sub:"Annuaire, coordonnées, répartition"},
-      {title:"Audiences programmées", sub:"Vue d’ensemble des BJ et BCO à venir"},
-      {title:"Suivi des dossiers", sub:"États d’avancement, échéances de délibéré"},
-      {title:"Contacts du greffe", sub:"Interlocuteurs utiles pour la section"}
-    ]
+  root.appendChild(h("div", {class:"banner blue"},
+    h("span", null, h("b", null, "Module en construction. "), "Un espace pour piloter votre section — à construire ensemble.")
+  ));
+
+  root.appendChild(h("div", {class:"section-title"}, "Acteurs de ma section"));
+  var membersPanel = h("div", {class:"panel"});
+  membersPanel.appendChild(h("div", {class:"row-click", onclick:function(){ go("section-membres"); }},
+    h("div", {class:"rc-main"},
+      h("div", {class:"rc-title"}, "Répertoire des acteurs"),
+      h("div", {class:"rc-sub"}, state.sectionMembers.length ? state.sectionMembers.length+(state.sectionMembers.length>1 ? " conseillers enregistrés" : " conseiller enregistré") : "Greffier, co-président, conseillers")
+    ),
+    icon("ic-chev", "chev")
+  ));
+  root.appendChild(membersPanel);
+
+  var planningPanel = h("div", {class:"panel"});
+  planningPanel.appendChild(h("div", {class:"row-click", onclick:function(){ go("planification"); }},
+    h("div", {class:"rc-main"},
+      h("div", {class:"rc-title"}, "Outil de planification"),
+      h("div", {class:"rc-sub"}, state.planning.length ? state.planning.length+(state.planning.length>1 ? " dates enregistrées" : " date enregistrée") : "Plannings BJ, BCO et BCO MEE")
+    ),
+    icon("ic-chev", "chev")
+  ));
+  root.appendChild(planningPanel);
+
+  root.appendChild(h("div", {class:"section-title"}, "Pistes possibles"));
+  var ideasPanel = h("div", {class:"panel"});
+  [
+    {title:"Suivi des dossiers", sub:"États d’avancement, échéances de délibéré"},
+    {title:"Contacts du greffe", sub:"Interlocuteurs utiles pour la section"}
+  ].forEach(function(idea){
+    var row = h("div", {class:"row-click"},
+      h("div", {class:"rc-main"},
+        h("div", {class:"rc-title"}, idea.title),
+        h("div", {class:"rc-sub"}, idea.sub)
+      ),
+      icon("ic-chev", "chev")
+    );
+    row.addEventListener("click", function(){
+      toast("Bientôt disponible — dites-moi si c’est utile pour votre section.");
+    });
+    ideasPanel.appendChild(row);
   });
+  root.appendChild(ideasPanel);
+  root.appendChild(h("div", {class:"footnote"}, "Dites-moi ce qui vous serait le plus utile ici — je construis ce module avec vous."));
+};
+
+/* =================================================================
+   ÉCRAN — ACTEURS DE MA SECTION (répertoire)
+   ================================================================= */
+var SECTION_ROLES = [
+  {key:"greffier", label:"Greffier de section"},
+  {key:"coPresident", label:"Vice-président"}
+];
+function openSectionRoleForm(roleKey, roleLabel){
+  var draft = Object.assign({}, state.sectionRoles[roleKey]);
+
+  var form = h("div", null);
+  form.appendChild(h("label", {class:"field-label"}, "Prénom"));
+  var prenomIn = h("input", {type:"text", value:draft.prenom, autocapitalize:"words"});
+  form.appendChild(prenomIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Nom"));
+  var nomIn = h("input", {type:"text", value:draft.nom, autocapitalize:"words"});
+  form.appendChild(nomIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Email"));
+  var emailIn = h("input", {type:"email", value:draft.email, autocapitalize:"none", autocomplete:"email"});
+  form.appendChild(emailIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Téléphone"));
+  var telIn = h("input", {type:"tel", value:draft.tel, autocomplete:"tel"});
+  form.appendChild(telIn);
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    state.sectionRoles[roleKey] = {
+      prenom: prenomIn.value.trim(), nom: nomIn.value.trim(),
+      email: emailIn.value.trim(), tel: telIn.value.trim()
+    };
+    saveState(); closeSheet(); render("section-membres");
+    toast("Informations enregistrées.");
+  }}, "Enregistrer"));
+  actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
+    state.sectionRoles[roleKey] = {prenom:"", nom:"", email:"", tel:""};
+    saveState(); closeSheet(); render("section-membres");
+    toast("Informations effacées.");
+  }}, "Effacer ces informations"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
+  form.appendChild(actions);
+
+  openSheet(roleLabel, form);
+}
+function openSectionMemberForm(existing){
+  var isEdit = !!existing;
+  var draft = existing ? Object.assign({}, existing) : { id:uid(), nom:"", prenom:"", college:"", syndicat:"", email:"", tel:"" };
+
+  var form = h("div", null);
+  form.appendChild(h("label", {class:"field-label"}, "Nom"));
+  var nomIn = h("input", {type:"text", value:draft.nom, autocapitalize:"words"});
+  form.appendChild(nomIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Prénom"));
+  var prenomIn = h("input", {type:"text", value:draft.prenom, autocapitalize:"words"});
+  form.appendChild(prenomIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Collège"));
+  var collegeSel = h("select", null,
+    h("option", {value:"", selected: draft.college?null:"selected"}, "— Non précisé —"),
+    COLLEGES.map(function(c){ return h("option", {value:c, selected: c===draft.college?"selected":null}, c); })
+  );
+  form.appendChild(collegeSel);
+
+  form.appendChild(h("label", {class:"field-label"}, "Syndicat"));
+  var syndicatIn = h("input", {type:"text", value:draft.syndicat, placeholder:"Ex. CFDT, CGT, FO, CFE-CGC, MEDEF, CPME…"});
+  form.appendChild(syndicatIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Email"));
+  var emailIn = h("input", {type:"email", value:draft.email, autocapitalize:"none", autocomplete:"email"});
+  form.appendChild(emailIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Téléphone"));
+  var telIn = h("input", {type:"tel", value:draft.tel, autocomplete:"tel"});
+  form.appendChild(telIn);
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    var nom = nomIn.value.trim(), prenom = prenomIn.value.trim();
+    if(!nom && !prenom){ toast("Renseignez au moins un nom ou un prénom."); return; }
+    var entry = {
+      id: draft.id, nom:nom, prenom:prenom, college:collegeSel.value,
+      syndicat:syndicatIn.value.trim(), email:emailIn.value.trim(), tel:telIn.value.trim()
+    };
+    if(isEdit){
+      state.sectionMembers = state.sectionMembers.map(function(m){ return m.id===entry.id ? entry : m; });
+    } else {
+      state.sectionMembers.push(entry);
+    }
+    saveState(); closeSheet(); render("section-membres");
+    toast(isEdit ? "Conseiller modifié." : "Conseiller ajouté.");
+  }}, isEdit ? "Enregistrer les modifications" : "Ajouter le conseiller"));
+  if(isEdit){
+    actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
+      state.sectionMembers = state.sectionMembers.filter(function(m){ return m.id!==draft.id; });
+      saveState(); closeSheet(); render("section-membres"); toast("Conseiller supprimé.");
+    }}, "Supprimer ce conseiller"));
+  }
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
+  form.appendChild(actions);
+
+  openSheet(isEdit ? "Modifier le conseiller" : "Nouveau conseiller", form);
+}
+
+function memberSortCompare(a, b){
+  var an = (a.nom||"").toLocaleLowerCase("fr-FR"), bn = (b.nom||"").toLocaleLowerCase("fr-FR");
+  if(an !== bn) return an < bn ? -1 : 1;
+  var ap = (a.prenom||"").toLocaleLowerCase("fr-FR"), bp = (b.prenom||"").toLocaleLowerCase("fr-FR");
+  return ap < bp ? -1 : ap > bp ? 1 : 0;
+}
+function memberDisplayName(m){
+  return (m.nom ? m.nom.toUpperCase() : "") + (m.prenom ? (m.nom ? " " : "")+m.prenom : "");
+}
+/* Compteurs automatiques BJ/BCO d'un conseiller, calculés à partir des
+   dates enregistrées dans l'Outil de planification (BJ d'une part, BCO et
+   BCO MEE combinés d'autre part — la fiche n'affiche qu'un seul compteur
+   BCO). Un conseiller compte dans une date s'il en est le président ou
+   l'un des assesseurs. */
+function memberAudienceStats(member){
+  var today = todayISO();
+  var stats = { bjPast:0, bjUpcoming:0, bcoPast:0, bcoUpcoming:0 };
+  state.planning.forEach(function(pl){
+    var involved = pl.president===member.id || pl.assesseurs.indexOf(member.id)!==-1;
+    if(!involved) return;
+    var past = pl.date < today;
+    if(pl.type==="bj"){
+      if(past) stats.bjPast++; else stats.bjUpcoming++;
+    } else {
+      if(past) stats.bcoPast++; else stats.bcoUpcoming++;
+    }
+  });
+  return stats;
+}
+function openSectionMemberView(member){
+  var stats = memberAudienceStats(member);
+  var bjTotal = stats.bjPast + stats.bjUpcoming;
+  var bcoTotal = stats.bcoPast + stats.bcoUpcoming;
+
+  var body = h("div", null);
+  var info = h("div", {class:"info-list"});
+  function infoRow(label, value, href){
+    info.appendChild(h("div", {class:"info-row"},
+      h("div", {class:"info-label"}, label),
+      value && href
+        ? h("a", {href:href, class:"info-value"}, value)
+        : h("div", {class:"info-value"}, value || "—")
+    ));
+  }
+  infoRow("Collège", member.college);
+  infoRow("Syndicat", member.syndicat);
+  infoRow("Email", member.email, member.email ? "mailto:"+member.email : null);
+  infoRow("Téléphone", member.tel, member.tel ? "tel:"+member.tel : null);
+  body.appendChild(info);
+
+  body.appendChild(h("div", {class:"section-title", style:"font-size:.92rem; margin-top:20px;"}, "Bureau de jugement (BJ)"));
+  body.appendChild(h("div", {class:"stat-row"},
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(stats.bjPast)), h("div", {class:"l"}, "BJ passés")),
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(stats.bjUpcoming)), h("div", {class:"l"}, "BJ à venir")),
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(bjTotal)), h("div", {class:"l"}, "BJ totaux"))
+  ));
+
+  body.appendChild(h("div", {class:"section-title", style:"font-size:.92rem; margin-top:16px;"}, "Bureau de conciliation et d’orientation (BCO)"));
+  body.appendChild(h("div", {class:"stat-row"},
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(stats.bcoPast)), h("div", {class:"l"}, "BCO passés")),
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(stats.bcoUpcoming)), h("div", {class:"l"}, "BCO à venir")),
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(bcoTotal)), h("div", {class:"l"}, "BCO totaux"))
+  ));
+
+  body.appendChild(h("div", {class:"footnote", style:"margin-top:14px"}, "Ces compteurs sont calculés automatiquement à partir des dates enregistrées dans l’Outil de planification."));
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    closeSheet();
+    openSectionMemberForm(member);
+  }}, "Modifier"));
+  actions.appendChild(h("button", {class:"sheet-btn accent", onclick:function(){
+    closeSheet();
+    openMemberPlanningExportSheet(member);
+  }}, "Éditer son planning"));
+  actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
+    var name = memberDisplayName(member) || "ce conseiller";
+    openSheet("Supprimer cette fiche", h("div", null,
+      h("p", {class:"lede"}, "La fiche de "+name+" sera définitivement supprimée de cet appareil. Cette action est irréversible."),
+      h("button", {class:"sheet-btn danger", onclick:function(){
+        state.sectionMembers = state.sectionMembers.filter(function(m){ return m.id!==member.id; });
+        saveState(); closeSheet(); render("section-membres");
+        toast("Conseiller supprimé.");
+      }}, "Supprimer définitivement"),
+      h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+    ));
+  }}, "Supprimer cette fiche"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Fermer"));
+  body.appendChild(actions);
+
+  openSheet(memberDisplayName(member) || "Fiche du conseiller", body);
+}
+
+renderers["section-membres"] = function(root){
+  var members = state.sectionMembers;
+
+  root.appendChild(h("p", {class:"lede"}, "Les personnes clés de votre section, et le répertoire des conseillers par collège."));
+
+  var rolesPanel = h("div", {class:"panel"});
+  SECTION_ROLES.forEach(function(r){
+    var role = state.sectionRoles[r.key];
+    var name = memberDisplayName({nom:role.nom, prenom:role.prenom});
+    var subParts = [];
+    if(role.email) subParts.push(role.email);
+    if(role.tel) subParts.push(role.tel);
+    rolesPanel.appendChild(h("div", {class:"row-click", onclick:function(){ openSectionRoleForm(r.key, r.label); }},
+      h("div", {class:"rc-main"},
+        h("div", {class:"rc-title"}, r.label),
+        h("div", {class:"rc-sub"}, name ? (name + (subParts.length ? " · "+subParts.join(" · ") : "")) : "Non renseigné")
+      ),
+      icon("ic-chev", "chev")
+    ));
+  });
+  root.appendChild(rolesPanel);
+
+  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Conseillers de la section"));
+
+  if(members.length===0){
+    root.appendChild(h("div", {class:"init-empty"},
+      h("p", null, "Aucun conseiller enregistré pour l’instant.")
+    ));
+  } else {
+    root.appendChild(h("p", {class:"lede"}, members.length+(members.length>1 ? " conseillers enregistrés. " : " conseiller enregistré. ")+"Touchez une fiche pour la consulter."));
+
+    var groupOrder = COLLEGES.slice();
+    if(state.profile.college && groupOrder.indexOf(state.profile.college) > 0){
+      groupOrder = [state.profile.college].concat(groupOrder.filter(function(c){ return c!==state.profile.college; }));
+    }
+    groupOrder.push(""); // Collège non précisé, toujours affiché en dernier.
+
+    groupOrder.forEach(function(collegeValue){
+      var group = members.filter(function(m){ return (m.college||"")===collegeValue; }).sort(memberSortCompare);
+      if(group.length===0) return;
+      root.appendChild(h("div", {class:"section-title"}, collegeValue ? "Collège "+collegeValue.toLowerCase() : "Collège non précisé"));
+      var panel = h("div", {class:"panel"});
+      group.forEach(function(m){
+        var subParts = [];
+        if(m.syndicat) subParts.push(m.syndicat);
+        if(m.email) subParts.push(m.email);
+        panel.appendChild(h("div", {class:"row-click", onclick:function(){ openSectionMemberView(m); }},
+          h("div", {class:"rc-main"},
+            h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
+            h("div", {class:"rc-sub"}, subParts.length ? subParts.join(" · ") : "—")
+          ),
+          h("div", {class:"rc-val"}, m.tel || "")
+        ));
+      });
+      root.appendChild(panel);
+    });
+  }
+
+  root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){ openSectionMemberForm(null); }},
+    "+ Ajouter un conseiller"));
+
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:16px"}, "Ce répertoire est enregistré uniquement sur cet appareil, comme le reste de vos données."));
+};
+
+/* =================================================================
+   ÉCRAN — OUTIL DE PLANIFICATION
+   ================================================================= */
+
+/* Nombre de dates de planification d'un type donné (bj / bco / bco-mee)
+   où le conseiller est président ou assesseur. */
+function memberTotalForType(memberId, typeId){
+  var n = 0;
+  state.planning.forEach(function(pl){
+    if(pl.type!==typeId) return;
+    if(pl.president===memberId || pl.assesseurs.indexOf(memberId)!==-1) n++;
+  });
+  return n;
+}
+/* Nombre total d'audiences tous types confondus (BJ + BCO + BCO MEE). */
+function memberTotalAllTypes(memberId){
+  return PLANNING_TYPES.reduce(function(sum, t){ return sum + memberTotalForType(memberId, t.id); }, 0);
+}
+
+/* Classement des candidats proposés : en premier critère, le nombre total
+   d'audiences tous types confondus (du moins sollicité au plus sollicité) ;
+   à égalité, le nombre d'audiences du même type que celle en cours de
+   planification ; à égalité encore, l'ordre alphabétique. */
+function rankedCandidates(collegeValue, typeId){
+  return state.sectionMembers
+    .filter(function(m){ return (m.college||"")===collegeValue; })
+    .map(function(m){ return { id:m.id, member:m, count: memberTotalForType(m.id, typeId), total: memberTotalAllTypes(m.id) }; })
+    .sort(function(a,b){
+      if(a.total!==b.total) return a.total-b.total;
+      if(a.count!==b.count) return a.count-b.count;
+      return memberSortCompare(a.member, b.member);
+    });
+}
+
+function candidateOptionLabel(c, typeId){
+  var unit = typeId==="bj" ? "BJ" : typeId==="bco" ? "BCO" : "BCO MEE";
+  return memberDisplayName(c.member) + " — " + c.total + " audience"+(c.total>1?"s":"")+" au total ("+c.count+" "+unit+")";
+}
+
+/* Mention entre parenthèses du collège d'un conseiller, affichée après
+   son nom sur tous les plannings (« (S) » pour Salarié, « (E) » pour
+   Employeur) afin de toujours savoir à quel collège chacun appartient,
+   même une fois les deux collèges mélangés sur un même document. */
+function collegeSuffix(college){
+  return college==="Salarié" ? " (S)" : college==="Employeur" ? " (E)" : "";
+}
+
+function resolveMemberName(id){
+  if(!id) return "";
+  if(id==="__self__") return "Moi-même"+(fullName(state.profile) ? " — "+fullName(state.profile)+collegeSuffix(state.profile.college) : "");
+  var m = state.sectionMembers.filter(function(x){ return x.id===id; })[0];
+  return m ? memberDisplayName(m)+collegeSuffix(m.college) : "(Conseiller supprimé)";
+}
+/* Même résolution que resolveMemberName, mais pour le document imprimé :
+   l'utilisateur y apparaît sous la même forme « NOM Prénom » que les
+   autres conseillers, sans la mention « Moi-même ». */
+function resolveMemberNameForPrint(id){
+  if(!id) return "";
+  if(id==="__self__") return (memberDisplayName({nom:state.profile.nom, prenom:state.profile.prenom}) || "Moi-même")+collegeSuffix(state.profile.college);
+  return resolveMemberName(id);
+}
+
+function planningDateLabel(dateStr){
+  var label = parseISODate(dateStr).toLocaleDateString("fr-FR", {weekday:"long", day:"numeric", month:"long", year:"numeric"});
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+/* Une date est « incomplète » si tous les rôles attendus ne sont pas
+   renseignés : un BJ attend un président + un assesseur (ou deux
+   assesseurs si le collège ne préside pas) — soit 2 personnes dans tous
+   les cas ; un BCO/BCO MEE n'en attend qu'une (président ou assesseur
+   selon la présidence). */
+function planningEntryIncomplete(p){
+  var expected = p.type==="bj" ? 2 : 1;
+  var filled = (p.president ? 1 : 0) + p.assesseurs.length;
+  return filled < expected;
+}
+
+function openPlanningForm(existing, defaultType){
+  var isEdit = !!existing;
+  var defaultCollege = state.profile.college || COLLEGES[0] || "";
+  var draft = existing ? Object.assign({}, existing, {assesseurs: existing.assesseurs.slice()}) : {
+    id:uid(), type: defaultType || "bj", date:"", college: defaultCollege, presidence: defaultCollege,
+    president:null, assesseurs:[]
+  };
+
+  var form = h("div", null);
+
+  form.appendChild(h("label", {class:"field-label"}, "Type"));
+  var typeSel = h("select", null, PLANNING_TYPES.map(function(t){
+    return h("option", {value:t.id, selected: t.id===draft.type ? "selected" : null}, t.label);
+  }));
+  form.appendChild(typeSel);
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Date"));
+  var dateInput = h("input", {type:"date", value:draft.date});
+  form.appendChild(dateInput);
+
+  /* Le collège n'est plus un choix pour une NOUVELLE date : elle est
+     toujours créée dans le collège renseigné dans les paramètres. Lors de
+     la MODIFICATION d'une date existante, en revanche, on conserve son
+     collège d'origine plutôt que de le forcer — une date reçue de l'autre
+     collège via « Importer de l'autre collège » doit rester attribuée à ce
+     collège même si on l'ouvre pour la consulter ou la corriger. */
+  var entryCollege = (isEdit && COLLEGES.indexOf(draft.college)!==-1) ? draft.college : defaultCollege;
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Statut"));
+  var presidenceSel = h("select", null, COLLEGES.map(function(c){
+    return h("option", {value:c, selected: c===draft.presidence ? "selected" : null}, "Présidence "+(c==="Salarié"?"salariée":"employeur"));
+  }));
+  form.appendChild(presidenceSel);
+
+  var rolesBox = h("div", {style:"margin-top:14px"});
+  form.appendChild(rolesBox);
+
+  var presidentSel = null, assesseurSels = [];
+
+  function roleSelect(candidates, typeId, allowSelf){
+    var opts = [ h("option", {value:"", selected:"selected"}, "— Choisir —") ];
+    if(allowSelf){
+      opts.push(h("option", {value:"__self__"}, "Moi-même — "+(fullName(state.profile)||"vous")));
+    }
+    candidates.forEach(function(c){
+      opts.push(h("option", {value:c.id}, candidateOptionLabel(c, typeId)));
+    });
+    return h("select", null, opts);
+  }
+
+  /* L'utilisateur apparaît toujours comme candidat possible (« Moi-même »)
+     dans tous les menus de rôle dès lors que le collège choisi est le
+     sien — sauf dans les menus autres que celui où il est déjà retenu
+     pour cette même audience (une même personne ne peut tenir deux rôles
+     à la fois) : voir syncSelfAvailability ci-dessous. */
+  function syncSelfAvailability(allowSelf){
+    if(!allowSelf) return;
+    var selects = [presidentSel].concat(assesseurSels).filter(Boolean);
+    var holder = null;
+    selects.forEach(function(sel){ if(sel.value==="__self__") holder = sel; });
+    selects.forEach(function(sel){
+      var opt = sel.querySelector('option[value="__self__"]');
+      if(sel===holder) return;
+      if(holder){
+        if(opt) opt.remove();
+      } else if(!opt){
+        var newOpt = h("option", {value:"__self__"}, "Moi-même — "+(fullName(state.profile)||"vous"));
+        sel.insertBefore(newOpt, sel.options[1] || null);
+      }
+    });
+  }
+
+  function updateRoles(){
+    clear(rolesBox);
+    presidentSel = null; assesseurSels = [];
+    var type = typeSel.value;
+    var college = entryCollege;
+    var presides = college === presidenceSel.value;
+    var candidates = rankedCandidates(college, type);
+    var allowSelf = college === state.profile.college;
+
+    if(candidates.length===0){
+      rolesBox.appendChild(h("div", {class:"footnote"}, "Aucun conseiller enregistré dans ce collège — ajoutez-le d’abord dans « Acteurs de ma section »."));
+    }
+
+    if(type==="bj"){
+      if(presides){
+        rolesBox.appendChild(h("label", {class:"field-label"}, "Président"));
+        presidentSel = roleSelect(candidates, type, allowSelf);
+        rolesBox.appendChild(presidentSel);
+        rolesBox.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Assesseur"));
+        var a1 = roleSelect(candidates, type, allowSelf);
+        rolesBox.appendChild(a1);
+        assesseurSels = [a1];
+      } else {
+        rolesBox.appendChild(h("label", {class:"field-label"}, "1er assesseur"));
+        var b1 = roleSelect(candidates, type, allowSelf);
+        rolesBox.appendChild(b1);
+        rolesBox.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "2e assesseur"));
+        var b2 = roleSelect(candidates, type, allowSelf);
+        rolesBox.appendChild(b2);
+        assesseurSels = [b1, b2];
+      }
+    } else {
+      if(presides){
+        rolesBox.appendChild(h("label", {class:"field-label"}, "Président"));
+        presidentSel = roleSelect(candidates, type, allowSelf);
+        rolesBox.appendChild(presidentSel);
+      } else {
+        rolesBox.appendChild(h("label", {class:"field-label"}, "Assesseur"));
+        var c1 = roleSelect(candidates, type, allowSelf);
+        rolesBox.appendChild(c1);
+        assesseurSels = [c1];
+      }
+    }
+
+    /* Pré-sélection des valeurs existantes, une fois les menus reconstruits. */
+    if(presidentSel){
+      if(draft.president && (draft.president==="__self__" || candidates.some(function(c){ return c.id===draft.president; }))){
+        presidentSel.value = draft.president;
+      }
+    }
+    assesseurSels.forEach(function(sel, i){
+      var val = draft.assesseurs[i];
+      if(val && (val==="__self__" || candidates.some(function(c){ return c.id===val; }))){
+        sel.value = val;
+      }
+    });
+
+    var allSelects = [presidentSel].concat(assesseurSels).filter(Boolean);
+    allSelects.forEach(function(sel){ sel.addEventListener("change", function(){ syncSelfAvailability(allowSelf); }); });
+    syncSelfAvailability(allowSelf);
+  }
+  typeSel.addEventListener("change", updateRoles);
+  presidenceSel.addEventListener("change", updateRoles);
+  updateRoles();
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    if(!dateInput.value){ toast("Choisissez une date."); return; }
+
+    var picked = [];
+    if(presidentSel && presidentSel.value) picked.push(presidentSel.value);
+    assesseurSels.forEach(function(sel){ if(sel.value) picked.push(sel.value); });
+    var dupes = picked.filter(function(v, i){ return picked.indexOf(v)!==i; });
+    if(dupes.length){ toast("Une même personne ne peut pas occuper deux rôles pour cette date."); return; }
+
+    var entry = {
+      id: draft.id,
+      type: typeSel.value,
+      date: dateInput.value,
+      college: entryCollege,
+      presidence: presidenceSel.value,
+      president: presidentSel && presidentSel.value ? presidentSel.value : null,
+      assesseurs: assesseurSels.map(function(sel){ return sel.value; }).filter(Boolean),
+      importSourceId: draft.importSourceId || null
+    };
+
+    if(isEdit){
+      state.planning = state.planning.map(function(p){ return p.id===entry.id ? entry : p; });
+    } else {
+      state.planning.push(entry);
+    }
+    saveState(); closeSheet();
+    planningViewType = entry.type;
+    planningViewMonth = monthKey(entry.date);
+    render("planification");
+    toast(isEdit ? "Date modifiée." : "Date ajoutée.");
+  }}, isEdit ? "Enregistrer les modifications" : "Ajouter la date"));
+  if(isEdit){
+    actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
+      state.planning = state.planning.filter(function(p){ return p.id!==draft.id; });
+      saveState(); closeSheet(); render("planification"); toast("Date supprimée.");
+    }}, "Supprimer cette date"));
+  }
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
+  form.appendChild(actions);
+
+  openSheet(isEdit ? "Modifier la date" : "Nouvelle date", form);
+}
+
+/* =================================================================
+   ÉCHANGE DU PLANNING AVEC L'AUTRE COLLÈGE (fichier JSON)
+   Chaque conseiller ne saisit que les audiences et conseillers de son
+   propre collège (voir openPlanningForm ci-dessus, qui fixe désormais le
+   collège au profil). Pour obtenir, de chaque côté, un planning complet
+   des deux collèges, on échange un fichier JSON auto-suffisant : les
+   références aux conseillers y sont enregistrées sous forme de nom
+   (nom/prénom), jamais d'identifiant interne, ces identifiants étant
+   propres à chaque appareil et n'ayant aucun sens une fois transmis.
+   ================================================================= */
+
+/* Forme « exportable » (nom/prénom uniquement) d'un président ou
+   assesseur d'audience — équivalent de resolveMemberNameForPrint, mais
+   qui renvoie un objet structuré plutôt qu'un texte déjà mis en forme,
+   pour pouvoir être ré-associé à un conseiller local à l'import. */
+function resolveMemberForExport(id){
+  if(!id) return null;
+  if(id==="__self__") return { nom: state.profile.nom||"", prenom: state.profile.prenom||"" };
+  var m = state.sectionMembers.filter(function(x){ return x.id===id; })[0];
+  return m ? { nom: m.nom||"", prenom: m.prenom||"" } : null;
+}
+
+/* Construit le fichier à transmettre : uniquement les données du propre
+   collège de l'utilisateur (conseillers + audiences), les rôles étant
+   dénormalisés en nom/prénom (voir resolveMemberForExport ci-dessus). */
+function planningSharePayload(){
+  var myCollege = state.profile.college || COLLEGES[0] || "";
+  var members = state.sectionMembers
+    .filter(function(m){ return (m.college||"")===myCollege; })
+    .map(function(m){ return { nom:m.nom||"", prenom:m.prenom||"", syndicat:m.syndicat||"", email:m.email||"", tel:m.tel||"" }; });
+  var planning = state.planning
+    .filter(function(p){ return (p.college||"")===myCollege; })
+    .map(function(p){
+      return {
+        id: p.id,
+        type: p.type,
+        date: p.date,
+        presidence: p.presidence,
+        president: resolveMemberForExport(p.president),
+        assesseurs: (p.assesseurs||[]).map(resolveMemberForExport).filter(Boolean)
+      };
+    });
+  return {
+    schema: "cph-planning-share.v1",
+    exportedAt: new Date().toISOString(),
+    college: myCollege,
+    role: state.profile.sectionRole || "",
+    section: state.profile.section||"",
+    cph: cphLabel(state.profile),
+    from: fullName(state.profile),
+    members: members,
+    planning: planning
+  };
+}
+
+/* Complétude du planning du collège de l'utilisateur (toutes les audiences
+   qu'il a lui-même créées, tous types confondus, entièrement pourvues en
+   conseillers de son collège). Sert à activer les boutons de partage du
+   flux président ⇄ vice-président ci-dessous. */
+function myCollegeEntries(){
+  var myCollege = state.profile.college || COLLEGES[0] || "";
+  return state.planning.filter(function(p){ return (p.college||"")===myCollege; });
+}
+function myCollegeComplete(){
+  var mine = myCollegeEntries();
+  return mine.length>0 && mine.every(function(p){ return !planningEntryIncomplete(p); });
+}
+/* Complétude des DEUX collèges à la fois : condition d'activation du bouton
+   « Envoyer planning au Greffe ». Se base sur les entrées FUSIONNÉES
+   (mergePlanningEntriesForDisplay) de la même période que celle
+   effectivement envoyée au greffe (mois en cours et à venir — voir
+   sectionBroadcastImageEntries), avec le même calcul de complétude que le
+   document imprimé (mergedEntryCompleteness) : une simple vérification
+   « chaque collège n'a que des enregistrements complets » ne suffit pas,
+   car une audience peut très bien n'avoir JAMAIS reçu de contrepartie de
+   l'autre collège (aucun enregistrement du tout de ce côté) sans que cela
+   ne rende incomplet un seul enregistrement EXISTANT — le bouton
+   s'activerait alors à tort alors que le document envoyé comporterait
+   encore des cases « Non renseigné ». */
+function bothCollegesComplete(){
+  var merged = mergePlanningEntriesForDisplay(sectionBroadcastImageEntries());
+  return merged.length>0 && merged.every(function(pl){ return !mergedEntryCompleteness(pl).incomplete; });
+}
+
+/* Bouton « Partager avec le vice-président » (côté président) / « Renvoyer
+   au président » (côté vice-président) : même mécanique dans les deux sens
+   — chacun envoie le planning de son propre collège à son binôme, dont le
+   contact est enregistré dans « Acteurs de ma section ». Tente d'abord un
+   vrai partage avec pièce jointe via l'API Web Share (l'app Mail apparaît
+   directement dans la feuille de partage, fichier déjà attaché) — même
+   principe que l'envoi du relevé RITA (voir shareOrMailtoRita). À défaut,
+   on télécharge le fichier puis on ouvre un brouillon d'email pré-rempli,
+   la pièce jointe devant alors être ajoutée manuellement. */
+function sharePlanningWithCounterpart(){
+  var role = state.profile.sectionRole;
+  if(role!=="president" && role!=="vice-president"){
+    toast("Renseignez d’abord votre fonction en section dans les Paramètres.");
+    return;
+  }
+  var to = ((state.sectionRoles && state.sectionRoles.coPresident && state.sectionRoles.coPresident.email) || "").trim();
+  if(!to){
+    toast("Renseignez d’abord l’email du "+(role==="president"?"vice-président":"président")+" dans « Acteurs de ma section ».");
+    return;
+  }
+  if(!myCollegeComplete()){
+    toast("Complétez d’abord toutes les audiences de votre collège avant de partager le planning.");
+    return;
+  }
+  var payload = planningSharePayload();
+  if(payload.planning.length===0 && payload.members.length===0){
+    toast("Rien à partager pour l’instant : ajoutez au moins une audience ou un conseiller de votre collège.");
+    return;
+  }
+  var json = JSON.stringify(payload, null, 2);
+  var nom = sanitizeFilenamePart(state.profile.nom);
+  var collegeSlug = payload.college==="Salarié" ? "salarie" : payload.college==="Employeur" ? "employeur" : "college";
+  var filename = "planning-"+collegeSlug+(nom?"-"+nom:"")+".json";
+  var subject = "Planning — Collège "+(payload.college||"—")+(payload.section?" — Section "+payload.section:"");
+
+  var canShareFile = false, file = null;
+  try{
+    if(navigator.share && navigator.canShare && typeof File !== "undefined"){
+      file = new File([json], filename, {type:"application/json"});
+      canShareFile = navigator.canShare({files:[file]});
+    }
+  }catch(e){ canShareFile = false; }
+
+  if(canShareFile){
+    navigator.share({files:[file], title:subject, text:subject}).catch(function(){
+      savePlanningShareThenMailto(to, subject, json, filename, role);
+    });
+  } else {
+    savePlanningShareThenMailto(to, subject, json, filename, role);
+  }
+}
+function savePlanningShareThenMailto(to, subject, json, filename, role){
+  var body = "Bonjour,\n\nVeuillez trouver ci-joint le planning complet de mon collège, à importer dans votre outil de planification"
+    + (role==="president" ? " (bouton « Importer du président »)." : " (bouton « Importer la réponse du vice-président »).")
+    + "\n\n(pensez à joindre manuellement le fichier téléchargé à cet email avant l’envoi)\n\nCordialement.";
+  function openMailto(){
+    var link = "mailto:"+to+"?subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
+    try{ window.location.href = link; }catch(e){}
+  }
+  toast("Préparation du fichier…");
+  downloadsReady.then(function(){
+    if(!downloadsCap){
+      if(triggerFileDownload(filename, json, "application/json")){
+        toast("Fichier « "+filename+" » téléchargé — joignez-le à l’email qui s’ouvre.");
+        openMailto();
+      } else {
+        showDownloadFallback(json, filename);
+      }
+      return;
+    }
+    downloadsCap.save({ filename:filename, data:json }).then(function(){
+      toast("Fichier « "+filename+" » enregistré — joignez-le à l’email qui s’ouvre.");
+      openMailto();
+    }).catch(function(err){
+      if(err && err.code==="declined"){ toast("Téléchargement annulé."); return; }
+      if(triggerFileDownload(filename, json, "application/json")){
+        toast("Fichier « "+filename+" » téléchargé — joignez-le à l’email qui s’ouvre.");
+        openMailto();
+      } else {
+        showDownloadFallback(json, filename);
+      }
+    });
+  });
+}
+
+/* Bouton « Importer de l'autre collège » : fusionne le contenu d'un
+   fichier reçu dans les données locales. Principe de sûreté : l'import
+   n'écrit jamais que dans « l'espace » du collège du fichier — il ne
+   touche jamais aux conseillers ni aux audiences de son propre collège.
+   Les conseillers sont retrouvés par nom (au sein du même collège) pour
+   être mis à jour plutôt que dupliqués ; les audiences sont retrouvées
+   grâce à l'identifiant d'origine conservé lors d'un précédent import
+   (importSourceId), ce qui permet de réimporter plusieurs fois au fil des
+   mois, à mesure que l'autre collège complète son planning, sans jamais
+   créer de doublons. Rien n'est jamais supprimé par un import. */
+function mergePlanningImport(payload){
+  var college = payload.college;
+  var stats = { membersAdded:0, membersUpdated:0, entriesAdded:0, entriesUpdated:0 };
+
+  function findMember(nom, prenom){
+    var n = (nom||"").trim().toLocaleLowerCase("fr-FR"), p = (prenom||"").trim().toLocaleLowerCase("fr-FR");
+    return state.sectionMembers.filter(function(m){
+      return (m.college||"")===college
+        && (m.nom||"").trim().toLocaleLowerCase("fr-FR")===n
+        && (m.prenom||"").trim().toLocaleLowerCase("fr-FR")===p;
+    })[0] || null;
+  }
+  function upsertMember(nom, prenom, extra){
+    if(!nom && !prenom) return null;
+    extra = extra || {};
+    var existing = findMember(nom, prenom);
+    if(existing){
+      if(extra.syndicat) existing.syndicat = extra.syndicat;
+      if(extra.email) existing.email = extra.email;
+      if(extra.tel) existing.tel = extra.tel;
+      return existing.id;
+    }
+    var m = { id:uid(), nom:(nom||"").trim(), prenom:(prenom||"").trim(), college:college,
+      syndicat: extra.syndicat||"", email: extra.email||"", tel: extra.tel||"" };
+    state.sectionMembers.push(m);
+    stats.membersAdded++;
+    return m.id;
+  }
+
+  (payload.members||[]).forEach(function(pm){
+    if(!pm || (!pm.nom && !pm.prenom)) return;
+    var existedBefore = !!findMember(pm.nom, pm.prenom);
+    upsertMember(pm.nom, pm.prenom, pm);
+    if(existedBefore) stats.membersUpdated++;
+  });
+
+  function resolveRoleId(nameObj){
+    if(!nameObj || (!nameObj.nom && !nameObj.prenom)) return null;
+    return upsertMember(nameObj.nom, nameObj.prenom, {});
+  }
+
+  (payload.planning||[]).forEach(function(pp){
+    if(!pp || !pp.date || !pp.type) return;
+    var presidentId = resolveRoleId(pp.president);
+    var assesseurIds = (pp.assesseurs||[]).map(resolveRoleId).filter(Boolean);
+    var existingEntry = pp.id ? state.planning.filter(function(p){
+      return (p.college||"")===college && p.importSourceId===pp.id;
+    })[0] : null;
+    if(existingEntry){
+      existingEntry.type = pp.type;
+      existingEntry.date = pp.date;
+      existingEntry.presidence = pp.presidence || existingEntry.presidence;
+      existingEntry.president = presidentId;
+      existingEntry.assesseurs = assesseurIds;
+      stats.entriesUpdated++;
+    } else {
+      state.planning.push({
+        id: uid(), type: pp.type, date: pp.date, college: college,
+        presidence: pp.presidence || college,
+        president: presidentId, assesseurs: assesseurIds,
+        importSourceId: pp.id || null
+      });
+      stats.entriesAdded++;
+    }
+  });
+
+  return stats;
+}
+
+function isValidPlanningSharePayload(parsed){
+  return !!(parsed && typeof parsed==="object"
+    && typeof parsed.schema==="string" && parsed.schema.indexOf("cph-planning-share")===0
+    && COLLEGES.indexOf(parsed.college)!==-1
+    && Array.isArray(parsed.members) && Array.isArray(parsed.planning));
+}
+
+/* À réception du fichier du président, le vice-président ne doit pas avoir
+   à recréer lui-même les dates d'audience : on crée automatiquement, dans
+   SON PROPRE collège, une entrée « vide » en regard de chaque audience
+   reçue (mêmes date/type/présidence), qu'il n'aura plus qu'à compléter
+   avec ses propres conseillers. Idempotent et jamais destructeur : si une
+   entrée correspondante existe déjà (créée par un import précédent, ou
+   déjà en partie complétée par le vice-président), elle n'est pas touchée
+   — seules les dates réellement nouvelles génèrent une entrée. */
+function createOwnCollegeStubs(payload){
+  var myCollege = state.profile.college || COLLEGES[0] || "";
+  var added = 0;
+  (payload.planning||[]).forEach(function(pp){
+    if(!pp || !pp.date || !pp.type || !pp.id) return;
+    var existing = state.planning.filter(function(p){
+      return (p.college||"")===myCollege && p.importSourceId===pp.id;
+    })[0];
+    if(!existing){
+      state.planning.push({
+        id: uid(), type: pp.type, date: pp.date, college: myCollege,
+        presidence: pp.presidence || myCollege,
+        president: null, assesseurs: [],
+        importSourceId: pp.id
+      });
+      added++;
+    }
+  });
+  return added;
+}
+
+/* Confirmation d'import du flux guidé président ⇄ vice-président.
+   expectedRole est le rôle attendu de l'EXPÉDITEUR du fichier (le
+   destinataire attend forcément l'inverse de son propre rôle) ; withStubs
+   déclenche en plus, une fois l'import réalisé, la création des entrées
+   vides du propre collège du destinataire (réservé au vice-président
+   recevant un fichier du président — voir createOwnCollegeStubs). */
+function openPlanningRoleImportConfirm(payload, expectedRole, withStubs){
+  var exportedDate = null;
+  try{ exportedDate = payload.exportedAt ? new Date(payload.exportedAt) : null; }catch(e){}
+  var whenTxt = exportedDate && !isNaN(exportedDate) ? " le "+exportedDate.toLocaleDateString("fr-FR") : "";
+  var expediteurLabel = expectedRole==="president" ? "président" : "vice-président";
+  openSheet("Importer le planning", h("div", null,
+    h("p", {class:"lede"},
+      "Fichier du collège "+(payload.college||"—")+(payload.from ? ", envoyé par le "+expediteurLabel+" — "+payload.from : "")+whenTxt+" — "
+      + payload.members.length+" conseiller(s) et "+payload.planning.length+" audience(s)."),
+    h("p", {class:"lede"},
+      withStubs
+        ? "Ces conseillers et audiences seront ajoutés ou mis à jour dans votre application, et une entrée vide sera créée dans votre propre collège pour chaque audience reçue, prête à compléter. Vos propres audiences déjà saisies ne seront pas modifiées, et rien n’est supprimé par cet import."
+        : "Ces conseillers et audiences seront ajoutés ou mis à jour dans votre application. Vos propres conseillers et audiences ne seront pas modifiés, et rien n’est supprimé par cet import."),
+    h("button", {class:"sheet-btn primary", onclick:function(){
+      var stats = mergePlanningImport(payload);
+      var stubsAdded = withStubs ? createOwnCollegeStubs(payload) : 0;
+      saveState(); closeSheet(); render("planification");
+      var msg = stats.membersAdded+" conseiller(s) ajouté(s), "+stats.membersUpdated+" mis à jour · "
+        + stats.entriesAdded+" audience(s) ajoutée(s), "+stats.entriesUpdated+" mise(s) à jour.";
+      if(withStubs) msg += " · "+stubsAdded+" audience(s) à compléter dans votre collège.";
+      toast(msg);
+    }}, "Confirmer l’import"),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+  ));
+}
+
+/* Point d'entrée commun aux deux boutons d'import du flux guidé : valide
+   le schéma, s'assure que le fichier provient bien du rôle attendu et d'un
+   collège différent du sien (jamais de son propre collège), puis ouvre la
+   confirmation. */
+function handlePlanningRoleImportFile(file, expectedRole, withStubs){
+  var reader = new FileReader();
+  reader.onload = function(){
+    try{
+      var parsed = JSON.parse(reader.result);
+      if(!isValidPlanningSharePayload(parsed)){
+        toast("Fichier illisible — vérifiez qu’il s’agit bien d’un export de planning de l’application.");
+        return;
+      }
+      var myCollege = state.profile.college || COLLEGES[0] || "";
+      if(parsed.college===myCollege){
+        toast("Ce fichier provient de votre propre collège — rien à importer.");
+        return;
+      }
+      if(parsed.role!==expectedRole){
+        toast(expectedRole==="president"
+          ? "Ce fichier ne provient pas du président de section — vérifiez la pièce jointe reçue."
+          : "Ce fichier ne provient pas du vice-président de section — vérifiez la pièce jointe reçue.");
+        return;
+      }
+      openPlanningRoleImportConfirm(parsed, expectedRole, withStubs);
+    }catch(err){ toast("Fichier illisible — vérifiez qu’il s’agit bien d’un export de planning de l’application."); }
+  };
+  reader.readAsText(file);
+}
+
+/* =================================================================
+   DIFFUSION DU PLANNING À TOUTE LA SECTION (fichier JSON)
+   Contrairement à l'échange entre co-présidents (un seul destinataire
+   connu, un seul collège), la présidence de section diffuse ici
+   l'intégralité du planning connu (les deux collèges, une fois
+   fusionnés via « Importer de l'autre collège ») à l'ensemble des
+   conseillers de la section. Chaque destinataire reçoit le même
+   fichier ; c'est son propre appareil (écran « Mon planning », voir
+   plus bas) qui n'en retient que les audiences où il apparaît. */
+function sectionBroadcastPayload(){
+  var members = state.sectionMembers.map(function(m){
+    return { nom:m.nom||"", prenom:m.prenom||"", college:m.college||"", syndicat:m.syndicat||"", email:m.email||"", tel:m.tel||"" };
+  });
+  var planning = state.planning.map(function(p){
+    return {
+      type: p.type, date: p.date, college: p.college||"", presidence: p.presidence||"",
+      president: resolveMemberForExport(p.president),
+      assesseurs: (p.assesseurs||[]).map(resolveMemberForExport).filter(Boolean)
+    };
+  });
+  return {
+    schema: "cph-planning-broadcast.v1",
+    exportedAt: new Date().toISOString(),
+    section: state.profile.section||"",
+    cph: cphLabel(state.profile),
+    from: fullName(state.profile),
+    fromTel: state.profile.tel||"",
+    members: members,
+    planning: planning
+  };
+}
+
+/* Entrées de planning utilisées pour l'image récapitulative jointe à la
+   diffusion : le mois en cours et tout ce qui suit, sans limite de fin
+   (contrairement au fichier JSON ci-dessus, qui lui reste sans aucune
+   restriction de date — passé compris — afin que chacun retrouve
+   l'intégralité de son planning dans « Mon planning »). Les deux
+   collèges apparaissent ensemble, la diffusion visant toute la section ;
+   le tri et la fusion des deux collèges par audience sont faits par
+   mergePlanningEntriesForDisplay chez l'appelant. */
+function sectionBroadcastImageEntries(){
+  var curMonthKey = monthKey(todayISO());
+  return state.planning.filter(function(pl){
+    return monthKey(pl.date) >= curMonthKey;
+  });
+}
+
+/* Bouton « Partager avec la section » : contrairement au partage avec le
+   co-président, il n'y a pas ici un destinataire unique connu — on laisse
+   l'utilisateur choisir ses destinataires (feuille de partage native, ou
+   brouillon email vierge à compléter). Deux pièces jointes sont
+   proposées : le fichier JSON complet (à importer dans « Mon planning »)
+   et une image JPG récapitulative du mois en cours et à venir, pour une
+   lecture immédiate sans import. */
+function shareSectionBroadcast(){
+  var payload = sectionBroadcastPayload();
+  if(payload.planning.length===0 && payload.members.length===0){
+    toast("Rien à partager pour l’instant : ajoutez au moins une audience ou un conseiller.");
+    return;
+  }
+  var json = JSON.stringify(payload, null, 2);
+  var nom = sanitizeFilenamePart(state.profile.nom);
+  var jsonFilename = "planning-section"+(nom?"-"+nom:"")+".json";
+  var subject = "Planning de la section"+(payload.section?" — "+payload.section:"");
+
+  var imageEntries = sectionBroadcastImageEntries();
+  if(imageEntries.length===0){
+    shareSectionBroadcastFiles(json, jsonFilename, subject, [], "");
+    return;
+  }
+
+  toast("Préparation de l’image…");
+  var curMonthKey = monthKey(todayISO());
+  var periodLabel = "À partir de "+monthLabel(curMonthKey);
+  var canvases = buildPlanningCanvases(periodLabel, "Toute la section", mergePlanningEntriesForDisplay(imageEntries));
+  var imageBaseName = planningDocBaseName(curMonthKey+"-a-venir", "section");
+  Promise.all(canvases.map(function(c){ return canvasToJpegBlob(c, 0.92); })).then(function(blobs){
+    shareSectionBroadcastFiles(json, jsonFilename, subject, blobs, imageBaseName);
+  });
+}
+function shareSectionBroadcastFiles(json, jsonFilename, subject, imageBlobs, imageBaseName){
+  var imageNames = imageBlobs.map(function(b, i){
+    return imageBaseName+(imageBlobs.length>1 ? "-page"+(i+1) : "")+".jpg";
+  });
+
+  var canShareFiles = false, allFiles = null;
+  try{
+    if(navigator.share && navigator.canShare && typeof File !== "undefined"){
+      var jsonFile = new File([json], jsonFilename, {type:"application/json"});
+      var imgFiles = imageBlobs.map(function(b, i){ return new File([b], imageNames[i], {type:"image/jpeg"}); });
+      allFiles = [jsonFile].concat(imgFiles);
+      canShareFiles = navigator.canShare({files:allFiles});
+    }
+  }catch(e){ canShareFiles = false; }
+
+  if(canShareFiles){
+    navigator.share({files:allFiles, title:subject, text:subject}).catch(function(){
+      saveSectionBroadcastFilesThenMailto(json, jsonFilename, subject, imageBlobs, imageNames);
+    });
+  } else {
+    saveSectionBroadcastFilesThenMailto(json, jsonFilename, subject, imageBlobs, imageNames);
+  }
+}
+function saveSectionBroadcastFilesThenMailto(json, jsonFilename, subject, imageBlobs, imageNames){
+  var hasImages = imageBlobs.length>0;
+  var body = "Bonjour,\n\nVeuillez trouver ci-joint le planning de la section"
+    + (hasImages ? " : le fichier à importer depuis « Mon planning » sur l’accueil de l’application, et une image récapitulative du mois en cours et à venir" : " (fichier à importer depuis « Mon planning » sur l’accueil de l’application)")
+    + " — chacun n’y verra que ses propres audiences une fois le fichier importé.\n\n"
+    + "(pensez à joindre manuellement les fichiers téléchargés à cet email avant l’envoi, et à compléter les destinataires)\n\nCordialement.";
+  function openMailto(){
+    var link = "mailto:?subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
+    try{ window.location.href = link; }catch(e){}
+  }
+
+  if(!hasImages){
+    /* Un seul fichier : le téléchargement automatique fonctionne bien
+       dans ce cas (c'est le cas déjà éprouvé du partage avec le
+       co-président, ou du planning de section seul quand aucune audience
+       à venir n'existe). */
+    toast("Préparation du fichier…");
+    downloadsReady.then(function(){
+      if(!downloadsCap){
+        if(triggerFileDownload(jsonFilename, json, "application/json")){
+          toast("Fichier « "+jsonFilename+" » téléchargé — joignez-le à l’email qui s’ouvre.");
+          openMailto();
+        } else {
+          showDownloadFallback(json, jsonFilename);
+        }
+        return;
+      }
+      downloadsCap.save({ filename:jsonFilename, data:json }).then(function(){
+        toast("Fichier « "+jsonFilename+" » enregistré — joignez-le à l’email qui s’ouvre.");
+        openMailto();
+      }).catch(function(err){
+        if(err && err.code==="declined"){ toast("Téléchargement annulé."); return; }
+        if(triggerFileDownload(jsonFilename, json, "application/json")){
+          toast("Fichier « "+jsonFilename+" » téléchargé — joignez-le à l’email qui s’ouvre.");
+          openMailto();
+        } else {
+          showDownloadFallback(json, jsonFilename);
+        }
+      });
+    });
+    return;
+  }
+
+  /* Plusieurs fichiers (JSON + image) : un navigateur ordinaire (cas de
+     l'application installée depuis GitHub Pages, sans la capacité
+     "downloads") bloque silencieusement les téléchargements
+     automatiques successifs au-delà du premier — seul le JSON se
+     téléchargeait alors, l'image jamais. Un clic explicite de
+     l'utilisateur sur chaque bouton, en revanche, n'est jamais bloqué :
+     on demande donc ici un clic par fichier plutôt que de tenter un
+     enchaînement automatique. */
+  if(!downloadsCap){
+    openSectionBroadcastFilesSheet(json, jsonFilename, imageBlobs, imageNames, openMailto);
+    return;
+  }
+
+  /* Capacité "downloads" native (aperçu dans Claude) : chaque appel
+     déclenche sa propre confirmation côté plateforme, donc l'enchaînement
+     automatique reste fiable ici. */
+  var files = [{filename:jsonFilename, data:json}];
+  imageBlobs.forEach(function(b, i){ files.push({filename:imageNames[i], data:b}); });
+  toast("Préparation des fichiers…");
+  downloadsReady.then(function(){
+    var i = 0;
+    function next(){
+      if(i >= files.length){
+        toast("Fichiers enregistrés — joignez-les à l’email qui s’ouvre.");
+        openMailto();
+        return;
+      }
+      downloadsCap.save(files[i]).then(function(){
+        i++; next();
+      }).catch(function(err){
+        if(err && err.code==="declined"){ toast("Téléchargement annulé."); return; }
+        openSectionBroadcastFilesSheet(json, jsonFilename, imageBlobs, imageNames, openMailto);
+      });
+    }
+    next();
+  });
+}
+/* Feuille de téléchargement manuel pour le cas « JSON + image » : un
+   vrai clic sur un lien <a download> n'est jamais bloqué par le
+   navigateur, contrairement à des téléchargements enchaînés par script.
+   Sert à la fois de chemin normal (appareil sans capacité "downloads",
+   dès qu'il y a plus d'un fichier) et de repli si l'enregistrement natif
+   échoue. */
+function openSectionBroadcastFilesSheet(json, jsonFilename, imageBlobs, imageNames, openMailto){
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, "Téléchargez chaque fichier ci-dessous d’un appui (les téléchargements groupés automatiques sont bloqués par la plupart des navigateurs), puis ouvrez l’email : il ne joint rien automatiquement, pensez à ajouter les fichiers depuis vos téléchargements avant de l’envoyer."));
+
+  try{
+    var jsonBlob = new Blob([json], {type:"application/json"});
+    var jsonUrl = URL.createObjectURL(jsonBlob);
+    body.appendChild(h("a", {href:jsonUrl, download:jsonFilename, class:"sheet-btn primary", style:"display:block; text-align:center; text-decoration:none; box-sizing:border-box; margin-bottom:12px;"}, "Télécharger « "+jsonFilename+" »"));
+  }catch(e){}
+
+  imageBlobs.forEach(function(b, i){
+    var url = URL.createObjectURL(b);
+    body.appendChild(h("div", {style:"margin-bottom:16px;"},
+      imageBlobs.length>1 ? h("p", {class:"lede"}, "Page "+(i+1)+" / "+imageBlobs.length) : null,
+      h("img", {src:url, style:"width:100%; border-radius:8px; border:1px solid var(--divider); display:block; margin-bottom:8px;"}),
+      h("a", {href:url, download:imageNames[i], class:"sheet-btn primary", style:"display:block; text-align:center; text-decoration:none; box-sizing:border-box;"}, "Télécharger « "+imageNames[i]+" »")
+    ));
+  });
+
+  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:function(){ closeSheet(); openMailto(); }}, "Ouvrir l’email"));
+  body.appendChild(h("label", {class:"field-label", style:"margin-top:18px"}, "Contenu JSON (à copier si besoin)"));
+  body.appendChild(h("textarea", {readonly:"readonly", style:"min-height:200px; font-family:var(--font-mono); font-size:.76rem; white-space:pre;"}, json));
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:12px", onclick:function(){ copyText(json); }}, "Copier le contenu JSON"));
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
+
+  openSheet("Télécharger le planning de la section", body);
+}
+
+function isValidSectionBroadcastPayload(parsed){
+  return !!(parsed && typeof parsed==="object"
+    && typeof parsed.schema==="string" && parsed.schema.indexOf("cph-planning-broadcast")===0
+    && Array.isArray(parsed.members) && Array.isArray(parsed.planning));
+}
+
+/* Ne retient, dans le fichier reçu, que les audiences où l'utilisateur
+   apparaît (comme président ou assesseur) — reconnu par son nom/prénom
+   tels que renseignés dans son profil. Remplace entièrement le planning
+   personnel précédemment importé (pas de fusion : c'est un instantané en
+   lecture seule, alimenté uniquement par la présidence de section).
+   payload.planning contient les enregistrements BRUTS des deux collèges
+   (un enregistrement par collège et par audience, comme dans state.planning
+   — voir sectionBroadcastPayload) : pour que l'écran « Mon planning »
+   puisse afficher TOUS les conseillers prévus sur une audience (et pas
+   seulement ceux de son propre côté), chaque enregistrement où
+   l'utilisateur apparaît est complété par son « pendant » (même date,
+   même type, collège opposé), sur le même principe que
+   mergePlanningEntriesForDisplay côté présidence : le président retenu
+   est celui du côté qui préside, les assesseurs des deux côtés sont
+   additionnés. Chaque conseiller est étiqueté par son collège d'origine
+   (voir collegeSuffix) pour rester lisible une fois les deux côtés
+   réunis. */
+function applyMyPlanningImport(payload){
+  var myNom = (state.profile.nom||"").trim().toLocaleLowerCase("fr-FR");
+  var myPrenom = (state.profile.prenom||"").trim().toLocaleLowerCase("fr-FR");
+  function isMe(nameObj){
+    if(!nameObj) return false;
+    return (nameObj.nom||"").trim().toLocaleLowerCase("fr-FR")===myNom
+      && (nameObj.prenom||"").trim().toLocaleLowerCase("fr-FR")===myPrenom;
+  }
+  function tagCollege(nameObj, college){
+    return nameObj ? { nom:nameObj.nom||"", prenom:nameObj.prenom||"", college:college||"" } : null;
+  }
+  var records = payload.planning||[];
+  var entries = [];
+  records.forEach(function(p){
+    if(!p || !p.date || !p.type) return;
+    var role = isMe(p.president) ? "president" : ((p.assesseurs||[]).some(isMe) ? "assesseur" : null);
+    if(!role) return;
+    var counterpart = records.filter(function(o){
+      return o!==p && o.date===p.date && o.type===p.type && (o.college||"")!==(p.college||"");
+    })[0] || null;
+    var presidingRec = (p.college||"")===(p.presidence||"") ? p : (counterpart && (counterpart.college||"")===(counterpart.presidence||"") ? counterpart : null);
+    var assesseurs = (p.assesseurs||[]).map(function(a){ return tagCollege(a, p.college); });
+    if(counterpart){
+      assesseurs = assesseurs.concat((counterpart.assesseurs||[]).map(function(a){ return tagCollege(a, counterpart.college); }));
+    }
+    entries.push({
+      type: p.type, date: p.date, college: p.college||"", presidence: p.presidence||"",
+      president: presidingRec ? tagCollege(presidingRec.president, presidingRec.college) : null,
+      assesseurs: assesseurs.filter(Boolean),
+      role: role
+    });
+  });
+  state.myPlanning = {
+    importedAt: new Date().toISOString(),
+    from: payload.from||"",
+    fromTel: payload.fromTel||"",
+    section: payload.section||"",
+    cph: payload.cph||"",
+    entries: entries,
+    members: (payload.members||[]).map(function(m){
+      return { nom:m.nom||"", prenom:m.prenom||"", college:m.college||"", syndicat:m.syndicat||"", email:m.email||"", tel:m.tel||"" };
+    })
+  };
+  return entries.length;
+}
+
+function openMyPlanningImportConfirm(payload){
+  if(!(state.profile.nom||"").trim() || !(state.profile.prenom||"").trim()){
+    toast("Renseignez d’abord votre nom et votre prénom dans Réglages, pour que votre planning personnel puisse être reconnu dans le fichier.");
+    return;
+  }
+  var exportedDate = null;
+  try{ exportedDate = payload.exportedAt ? new Date(payload.exportedAt) : null; }catch(e){}
+  var whenTxt = exportedDate && !isNaN(exportedDate) ? " le "+exportedDate.toLocaleDateString("fr-FR") : "";
+  openSheet("Importer mon planning", h("div", null,
+    h("p", {class:"lede"},
+      "Fichier de la section"+(payload.from ? ", envoyé par "+payload.from : "")+whenTxt+"."),
+    h("p", {class:"lede"},
+      "Seules les audiences où vous apparaissez (président ou assesseur) seront conservées. Ce planning personnel n’est pas modifiable ; il remplace la version précédemment importée, s’il y en avait une."),
+    h("button", {class:"sheet-btn primary", onclick:function(){
+      var n = applyMyPlanningImport(payload);
+      saveState(); closeSheet(); render("mon-planning");
+      toast(n>0 ? n+" audience(s) vous concernant importée(s)." : "Fichier importé — aucune audience ne vous concerne pour l’instant.");
+    }}, "Confirmer l’import"),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+  ));
+}
+
+/* =================================================================
+   ÉCRAN — MON PLANNING (conseiller sans droits de présidence)
+   ================================================================= */
+function myPlanningImportInput(onImported){
+  return h("input", {type:"file", accept:"application/json", style:"display:none", onchange:function(e){
+    var file = e.target.files[0]; if(!file) return;
+    var reader = new FileReader();
+    reader.onload = function(){
+      try{
+        var parsed = JSON.parse(reader.result);
+        if(!isValidSectionBroadcastPayload(parsed)){
+          toast("Fichier illisible — vérifiez qu’il s’agit bien d’un export envoyé depuis « Partager avec la section ».");
+          return;
+        }
+        openMyPlanningImportConfirm(parsed);
+      }catch(err){ toast("Fichier illisible — vérifiez qu’il s’agit bien d’un export envoyé depuis « Partager avec la section »."); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }});
+}
+
+/* Nom affiché pour un conseiller « Mon planning » ({nom,prenom,college}) —
+   même convention (S)/(E) que resolveMemberNameForPrint côté présidence. */
+function formatMyPlanningPerson(o){
+  if(!o || (!o.nom && !o.prenom)) return "";
+  return (memberDisplayName({nom:o.nom, prenom:o.prenom}) || "")+collegeSuffix(o.college);
+}
+function isMyPlanningSelf(nameObj){
+  if(!nameObj) return false;
+  var myNom = (state.profile.nom||"").trim().toLocaleLowerCase("fr-FR");
+  var myPrenom = (state.profile.prenom||"").trim().toLocaleLowerCase("fr-FR");
+  return (nameObj.nom||"").trim().toLocaleLowerCase("fr-FR")===myNom
+    && (nameObj.prenom||"").trim().toLocaleLowerCase("fr-FR")===myPrenom;
+}
+
+/* Ouvre l'app SMS native avec un message pré-rempli — même principe et
+   même limite que les liens mailto: employés ailleurs dans l'application
+   (impossible d'envoyer automatiquement depuis une page web, seule
+   l'ouverture pré-remplie l'est). Le séparateur avant "body=" diffère
+   entre iOS (« & ») et les autres systèmes (« ? »), d'où la détection. */
+function isIOSDevice(){
+  var ua = (navigator.userAgent || navigator.platform || "");
+  return /iP(hone|od|ad)/.test(ua);
+}
+function openSmsCompose(tel, body){
+  var digits = (tel||"").replace(/[^\d+]/g, "");
+  var sep = isIOSDevice() ? "&" : "?";
+  var link = "sms:"+encodeURIComponent(digits)+sep+"body="+encodeURIComponent(body);
+  try{ window.location.href = link; }catch(e){}
+}
+
+/* Vue détail d'une audience de « Mon planning » : rappelle qui d'autre y
+   est prévu (les deux collèges réunis, voir applyMyPlanningImport) et
+   propose la demande d'échange. */
+function openMyPlanningEntryDetail(e){
+  var body = h("div", null);
+  var sub = planningTypeLabel(e.type)+" · Présidence "+(e.presidence==="Salarié"?"salariée":e.presidence==="Employeur"?"employeur":"—");
+  body.appendChild(h("p", {class:"lede"}, sub));
+
+  var panel = h("div", {class:"panel"});
+  panel.appendChild(h("div", null,
+    h("div", {class:"field-label"}, "Président"),
+    h("div", {style:"margin-bottom:12px"}, e.president ? (formatMyPlanningPerson(e.president)+(isMyPlanningSelf(e.president) ? " (vous)" : "")) : "Non renseigné")
+  ));
+  panel.appendChild(h("div", null,
+    h("div", {class:"field-label"}, e.assesseurs.length>1 ? "Assesseurs" : "Assesseur"),
+    h("div", null, e.assesseurs.length
+      ? e.assesseurs.map(function(a){ return h("div", {style:"margin-bottom:4px"}, formatMyPlanningPerson(a)+(isMyPlanningSelf(a) ? " (vous)" : "")); })
+      : h("div", null, "Non renseigné"))
+  ));
+  body.appendChild(panel);
+
+  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){ openSwapRequestInstructions(e); }}, "Demander un échange"));
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
+
+  openSheet(planningDateLabel(e.date), body);
+}
+
+/* Étape 1 de la demande d'échange : marche à suivre — l'application ne
+   peut évidemment pas savoir qui accepte quoi, la démarche reste manuelle
+   (annuaire + accord écrit obligatoire) ; seule la notification finale au
+   président est automatisée. */
+function openSwapRequestInstructions(e){
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, "Contactez les autres conseillers de votre section et collège en utilisant l’annuaire."));
+  if(state.profile.annuaireUrl){
+    body.appendChild(h("a", {href:state.profile.annuaireUrl, target:"_blank", rel:"noopener", class:"sheet-btn ghost", style:"display:block; text-align:center; text-decoration:none; box-sizing:border-box; margin-bottom:8px;"}, "Ouvrir l’annuaire"));
+  }
+  body.appendChild(h("p", {class:"lede"}, "Une fois que la personne vous a accepté l’échange (confirmation écrite obligatoire — mail ou SMS), cliquez ci-dessous :"));
+  body.appendChild(h("button", {class:"sheet-btn accent", onclick:function(){ openSwapNotifyPicker(e); }}, "Notifier un échange"));
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler"));
+  openSheet("Demander un échange", body);
+}
+
+/* Étape 2 : choix du conseiller qui a accepté l'échange, parmi ceux du
+   même collège que soi (un échange ne change jamais le collège attaché à
+   l'audience), puis envoi du SMS de notification à la présidence de
+   section (numéro transmis avec le fichier — voir applyMyPlanningImport).
+   Comme pour tout lien sms:, l'application ne peut qu'ouvrir l'app de
+   messagerie pré-remplie ; l'envoi final reste un geste de l'utilisateur. */
+function openSwapNotifyPicker(e){
+  var mine = state.myPlanning || DEFAULT_STATE.myPlanning;
+  var myCollege = state.profile.college || COLLEGES[0] || "";
+  var candidates = (mine.members||[])
+    .filter(function(m){ return (m.college||"")===myCollege && !isMyPlanningSelf(m); })
+    .sort(function(a,b){ return memberDisplayName(a).localeCompare(memberDisplayName(b), "fr"); });
+
+  if(candidates.length===0){
+    openSheet("Notifier un échange", h("div", null,
+      h("p", {class:"lede"}, "Aucun autre conseiller de votre collège n’est disponible dans le fichier reçu — demandez à la présidence de section de vous transmettre une version à jour du planning (bouton « Importer une nouvelle version »)."),
+      h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Fermer")
+    ));
+    return;
+  }
+
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, "Qui a accepté de prendre votre place sur cette audience ?"));
+  body.appendChild(h("label", {class:"field-label"}, "Remplacé par"));
+  var sel = h("select", null,
+    [h("option", {value:"", selected:"selected"}, "— Choisir —")].concat(
+      candidates.map(function(c, i){ return h("option", {value:String(i)}, memberDisplayName(c)); })
+    )
+  );
+  body.appendChild(sel);
+
+  var sendBtn = h("button", {class:"sheet-btn accent", style:"margin-top:14px", disabled:"disabled", onclick:function(){
+    var chosen = candidates[Number(sel.value)];
+    if(!chosen) return;
+    var tel = (mine.fromTel||"").trim();
+    if(!tel){
+      toast("Le président de section n’a pas transmis de numéro de téléphone dans ce fichier — contactez-le autrement.");
+      return;
+    }
+    var audienceTxt = planningTypeLabel(e.type)+" du "+planningDateLabel(e.date);
+    var msg = "Bonjour, veuillez enregistrer l’échange suivant sur l’audience "+audienceTxt+" : "
+      + fullName(state.profile)+" est remplacé par "+memberDisplayName(chosen)+".";
+    closeSheet();
+    openSmsCompose(tel, msg);
+  }}, "Notifier le président");
+  sel.addEventListener("change", function(){ sendBtn.disabled = !sel.value; });
+  body.appendChild(sendBtn);
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler"));
+
+  openSheet("Notifier un échange", body);
+}
+
+renderers["mon-planning"] = function(root){
+  var mine = state.myPlanning || DEFAULT_STATE.myPlanning;
+
+  if(!mine.importedAt){
+    var fileIn = myPlanningImportInput();
+    root.appendChild(fileIn);
+    root.appendChild(h("p", {class:"lede"}, "Consultez ici votre planning personnel — uniquement les audiences où vous intervenez. Il est alimenté par la présidence de section, qui vous transmet un fichier depuis le bouton « Partager avec la section »."));
+    root.appendChild(h("div", {class:"panel"},
+      h("div", {class:"init-empty", style:"min-height:auto; padding:24px 4px;"},
+        h("p", null, "Aucun planning personnel enregistré pour l’instant."))
+    ));
+    root.appendChild(h("button", {class:"sheet-btn primary", style:"margin-top:14px", onclick:function(){ fileIn.click(); }}, "Importer un fichier reçu de la présidence de section"));
+    return;
+  }
+
+  var importedDate = null;
+  try{ importedDate = new Date(mine.importedAt); }catch(e){}
+  var whenTxt = importedDate && !isNaN(importedDate) ? importedDate.toLocaleDateString("fr-FR") : "";
+  root.appendChild(h("p", {class:"lede"}, "Planning reçu"+(mine.from ? " de "+mine.from : "")+(whenTxt ? " le "+whenTxt : "")+" — lecture seule ; seule la présidence de section peut le mettre à jour."));
+
+  var mode = "month";
+  var monthVal = monthKey(todayISO());
+  var yearVal = monthVal.slice(0,4);
+
+  var modeRow = h("div", {class:"btn-row", style:"margin-bottom:14px"});
+  var fieldBox = h("div", null);
+  root.appendChild(modeRow);
+  root.appendChild(fieldBox);
+
+  var monthBtn = h("button", {class:"sheet-btn small primary", onclick:function(){ mode="month"; updateModeButtons(); updateField(); renderList(); }}, "Un mois");
+  var yearBtn = h("button", {class:"sheet-btn small ghost", onclick:function(){ mode="year"; updateModeButtons(); updateField(); renderList(); }}, "Une année entière");
+  modeRow.appendChild(monthBtn); modeRow.appendChild(yearBtn);
+  function updateModeButtons(){
+    monthBtn.className = "sheet-btn small "+(mode==="month" ? "primary" : "ghost");
+    yearBtn.className = "sheet-btn small "+(mode==="year" ? "primary" : "ghost");
+  }
+
+  var monthInput = null, yearInput = null;
+  var listBox = h("div", {style:"margin-top:14px"});
+  function updateField(){
+    clear(fieldBox);
+    if(mode==="month"){
+      fieldBox.appendChild(h("label", {class:"field-label"}, "Mois"));
+      monthInput = h("input", {type:"month", value: monthVal, onchange:function(){ monthVal = monthInput.value; renderList(); }});
+      fieldBox.appendChild(monthInput);
+    } else {
+      fieldBox.appendChild(h("label", {class:"field-label"}, "Année"));
+      yearInput = h("input", {type:"number", value: yearVal, min:"2000", max:"2100", step:"1", inputmode:"numeric", onchange:function(){ yearVal = yearInput.value; renderList(); }});
+      fieldBox.appendChild(yearInput);
+    }
+  }
+  function renderList(){
+    clear(listBox);
+    var entries = mine.entries.filter(function(e){
+      return mode==="month" ? monthKey(e.date)===monthVal : e.date.slice(0,4)===String(yearVal);
+    }).sort(function(a,b){ return a.date<b.date ? -1 : a.date>b.date ? 1 : 0; });
+    var panel = h("div", {class:"panel"});
+    if(entries.length===0){
+      panel.appendChild(h("p", {class:"lede", style:"margin:0"}, "Aucune audience vous concernant sur cette période."));
+    } else {
+      entries.forEach(function(e){
+        var roleTxt = e.role==="president" ? "Vous présidez" : "Vous êtes assesseur";
+        var sub = roleTxt+" · "+planningTypeLabel(e.type)+" · Collège "+(e.college||"—").toLowerCase();
+        panel.appendChild(h("div", {class:"row-click", onclick:function(){ openMyPlanningEntryDetail(e); }},
+          h("div", {class:"rc-main"},
+            h("div", {class:"rc-title"}, planningDateLabel(e.date)),
+            h("div", {class:"rc-sub"}, sub)
+          ),
+          icon("ic-chev", "chev")
+        ));
+      });
+    }
+    listBox.appendChild(panel);
+  }
+  updateField();
+  root.appendChild(listBox);
+  renderList();
+
+  var refreshInput = myPlanningImportInput();
+  root.appendChild(refreshInput);
+  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:16px", onclick:function(){ refreshInput.click(); }}, "Importer une nouvelle version"));
+};
+
+renderers["planification"] = function(root){
+  root.appendChild(h("p", {class:"lede"}, "Programmez les BJ, BCO et BCO MEE de la section et répartissez présidences et assesseurs — les propositions se classent selon la charge déjà enregistrée de chaque conseiller."));
+
+  var typeRow = h("div", {class:"btn-row", style:"margin-bottom:12px; flex-wrap:wrap; row-gap:8px;"});
+  PLANNING_TYPES.forEach(function(t){
+    typeRow.appendChild(h("button", {
+      class: "sheet-btn small "+(planningViewType===t.id ? "primary" : "ghost"),
+      onclick:function(){ planningViewType = t.id; planningLastRealType = t.id; render("planification"); }
+    }, t.label));
+  });
+  typeRow.appendChild(h("button", {
+    class: "sheet-btn small "+(planningViewType==="incomplete" ? "danger" : "ghost"),
+    onclick:function(){ planningViewType = "incomplete"; render("planification"); }
+  }, "Audiences incomplètes"));
+  root.appendChild(typeRow);
+
+  var nav = h("div", {class:"btn-row", style:"align-items:center;margin-bottom:14px"},
+    h("button", {class:"sheet-btn ghost small", onclick:function(){
+      planningViewMonth = shiftMonthKey(planningViewMonth, -1);
+      render("planification");
+    }}, "←"),
+    h("div", {style:"flex:1;text-align:center;font-weight:600;font-size:.88rem"}, monthLabel(planningViewMonth)),
+    h("button", {class:"sheet-btn ghost small", onclick:function(){
+      planningViewMonth = shiftMonthKey(planningViewMonth, 1);
+      render("planification");
+    }}, "→")
+  );
+  root.appendChild(nav);
+
+  var entries = state.planning
+    .filter(function(p){
+      if(monthKey(p.date)!==planningViewMonth) return false;
+      return planningViewType==="incomplete" ? planningEntryIncomplete(p) : p.type===planningViewType;
+    })
+    .sort(function(a,b){ return a.date<b.date ? -1 : 1; });
+
+  var panel = h("div", {class:"panel"});
+  if(entries.length===0){
+    panel.appendChild(h("p", {class:"lede", style:"margin:0"}, planningViewType==="incomplete" ? "Aucune audience incomplète pour ce mois." : "Aucune date enregistrée pour ce mois."));
+  } else {
+    entries.forEach(function(p){
+      var roles = [];
+      if(p.president) roles.push("Président : "+resolveMemberName(p.president));
+      p.assesseurs.forEach(function(a, i){
+        roles.push((p.assesseurs.length>1 ? "Assesseur "+(i+1)+" : " : "Assesseur : ")+resolveMemberName(a));
+      });
+      var sub = (planningViewType==="incomplete" ? planningTypeLabel(p.type)+" · " : "") + "Collège "+(p.college||"—").toLowerCase()+" · Présidence "+(p.presidence==="Salarié"?"salariée":p.presidence==="Employeur"?"employeur":"—");
+      var incomplete = planningEntryIncomplete(p);
+      panel.appendChild(h("div", {class:"row-click"+(incomplete ? " incomplete" : ""), onclick:function(){ openPlanningForm(p); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"},
+            incomplete ? h("span", {class:"warn-blink", title:"Conseiller manquant"}, "⚠ ") : null,
+            planningDateLabel(p.date)
+          ),
+          h("div", {class:"rc-sub"}, (incomplete ? "Conseiller manquant · " : "") + sub + (roles.length ? " · "+roles.join(" · ") : ""))
+        ),
+        icon("ic-chev", "chev")
+      ));
+    });
+  }
+  root.appendChild(panel);
+
+  var role = state.profile.sectionRole;
+
+  /* Seul le président crée les audiences de la section ; le vice-président
+     ne fait que compléter, avec les conseillers de son collège, les dates
+     reçues du président (voir le flux d'import ci-dessous). */
+  if(role==="president"){
+    root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){ openPlanningForm(null, planningLastRealType); }},
+      "+ Ajouter une date"));
+  }
+
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:16px"}, "Le classement des présidents et assesseurs proposés se base sur le nombre de dates déjà attribuées à chaque conseiller pour ce même type d’audience."));
+
+  root.appendChild(h("div", {class:"section-title"}, "Document du planning"));
+  root.appendChild(h("p", {class:"lede"}, "Générez une image imprimable (JPG, format A4 paysage) qui regroupe toutes les audiences — BJ, BCO et BCO MEE confondus — d’un collège, sur un mois ou une année entière, quel que soit l’onglet ou le mois affichés ci-dessus."));
+
+  var buttons = [];
+  var complete = myCollegeComplete();
+
+  if(role==="president"){
+    var vicePresidentImportInput = h("input", {type:"file", accept:"application/json", style:"display:none", onchange:function(e){
+      var file = e.target.files[0]; if(!file) return;
+      handlePlanningRoleImportFile(file, "vice-president", false);
+      e.target.value = "";
+    }});
+    root.appendChild(vicePresidentImportInput);
+
+    buttons.push({
+      label:"Partager avec le vice-président", cls:"ghost",
+      disabled: !complete,
+      title: complete ? "" : "Complétez d’abord toutes les audiences de votre collège.",
+      onclick:function(){ sharePlanningWithCounterpart(); }
+    });
+    buttons.push({label:"Importer la réponse du vice-président", cls:"ghost", onclick:function(){ vicePresidentImportInput.click(); }});
+    buttons.push({label:"Imprimer le planning global", cls:"primary", onclick:function(){ openPlanningExportSheet(); }});
+    buttons.push({
+      label:"Envoyer planning au Greffe", cls:"ghost",
+      disabled: !bothCollegesComplete(),
+      title: bothCollegesComplete() ? "" : "Toutes les audiences à venir (mois en cours et après) doivent être entièrement pourvues dans les deux collèges au préalable.",
+      onclick:function(){ sendPlanningToGreffe(); }
+    });
+    buttons.push({label:"Partager avec la section", cls:"ghost", onclick:function(){ shareSectionBroadcast(); }});
+  } else if(role==="vice-president"){
+    var presidentImportInput = h("input", {type:"file", accept:"application/json", style:"display:none", onchange:function(e){
+      var file = e.target.files[0]; if(!file) return;
+      handlePlanningRoleImportFile(file, "president", true);
+      e.target.value = "";
+    }});
+    root.appendChild(presidentImportInput);
+
+    buttons.push({label:"Importer du président", cls:"ghost", onclick:function(){ presidentImportInput.click(); }});
+    buttons.push({
+      label:"Renvoyer au président", cls:"ghost",
+      disabled: !complete,
+      title: complete ? "" : "Complétez d’abord toutes les audiences de votre collège.",
+      onclick:function(){ sharePlanningWithCounterpart(); }
+    });
+    buttons.push({label:"Imprimer le planning global", cls:"primary", onclick:function(){ openPlanningExportSheet(); }});
+  } else {
+    root.appendChild(h("div", {class:"footnote"}, "Renseignez votre fonction en section (Président(e) ou Vice-président(e)) dans les Paramètres pour accéder aux outils de partage du planning."));
+  }
+
+  buttons.forEach(function(btn){
+    var attrs = {class:"sheet-btn "+btn.cls, style:"margin-top:10px"};
+    if(btn.disabled){ attrs.disabled = "disabled"; } else { attrs.onclick = btn.onclick; }
+    root.appendChild(h("button", attrs, btn.label));
+    if(btn.disabled && btn.title) root.appendChild(h("div", {class:"footnote", style:"margin-top:2px"}, btn.title));
+  });
+};
+
+/* Fusionne, pour un même jour et un même type d'audience, l'enregistrement
+   de chaque collège (chaque co-président ne saisit que les conseillers de
+   son propre collège dans « Outil de planification ») en une seule ligne
+   réunissant tous les conseillers renseignés, quel que soit leur collège
+   — plutôt que de n'en montrer que la moitié selon qui a saisi la ligne.
+   Le président effectif est celui du côté qui préside (college===
+   presidence) ; les assesseurs des deux côtés sont additionnés. Un BJ
+   attend au total 1 président + 3 assesseurs (1 du côté présidence, 2 de
+   l'autre côté) ; un BCO/BCO MEE attend 1 président + 1 assesseur. */
+function mergePlanningEntriesForDisplay(records){
+  var groups = {}, order = [];
+  records.forEach(function(pl){
+    var key = pl.date+"|"+pl.type;
+    if(!groups[key]){ groups[key] = []; order.push(key); }
+    groups[key].push(pl);
+  });
+  var merged = order.map(function(key){
+    var recs = groups[key];
+    var presidingRec = recs.filter(function(r){ return r.college===r.presidence; })[0] || null;
+    var assesseurs = [];
+    recs.forEach(function(r){ assesseurs = assesseurs.concat(r.assesseurs||[]); });
+    return {
+      date: recs[0].date,
+      type: recs[0].type,
+      presidence: presidingRec ? presidingRec.presidence : recs[0].presidence,
+      president: presidingRec ? presidingRec.president : null,
+      assesseurs: assesseurs
+    };
+  });
+  merged.sort(function(a,b){
+    if(a.date!==b.date) return a.date<b.date ? -1 : 1;
+    return (PLANNING_TYPE_ORDER[a.type]||0) - (PLANNING_TYPE_ORDER[b.type]||0);
+  });
+  return merged;
+}
+
+/* Complétude d'une entrée FUSIONNÉE (issue de mergePlanningEntriesForDisplay
+   ci-dessus) : calculée sur le TOTAL des deux collèges réunis (1 président
+   + 3 assesseurs pour un BJ — 1 du côté présidence, 2 de l'autre côté ; 1
+   président + 1 assesseur pour un BCO/BCO MEE), à ne pas confondre avec
+   planningEntryIncomplete, qui ne vérifie que la part de CHAQUE collège
+   prise isolément et sert uniquement à guider chaque président/vice-
+   président dans SA PROPRE saisie.
+   C'est cette fonction-ci, et elle seule, qui fait foi pour savoir si une
+   audience apparaîtra « incomplète » (surlignée en rouge) sur un document
+   imprimé ou envoyé — buildPlanningCanvases et bothCollegesComplete
+   DOIVENT impérativement partager ce même calcul : sinon le bouton
+   « Envoyer planning au Greffe » peut s'activer alors que le document
+   envoyé contient encore des audiences incomplètes — notamment quand une
+   audience n'a tout simplement jamais reçu de contrepartie de l'autre
+   collège (aucun enregistrement du tout de ce côté), ce qui ne rend
+   pourtant incomplet aucun enregistrement existant pris isolément. */
+function mergedEntryCompleteness(pl){
+  var assesseursExpected = pl.type==="bj" ? 3 : 1;
+  var presidentMissing = !pl.president;
+  var assesseursMissing = pl.assesseurs.length < assesseursExpected;
+  return { presidentMissing:presidentMissing, assesseursMissing:assesseursMissing, assesseursExpected:assesseursExpected, incomplete: presidentMissing || assesseursMissing };
+}
+
+/* Nom de fichier du document de planning : planning-{période}[-NOM]. */
+function planningDocBaseName(periodKey, scopeSlug){
+  var nom = sanitizeFilenamePart(state.profile.nom);
+  var base = "planning-"+periodKey+(scopeSlug ? "-"+scopeSlug : "");
+  return nom ? (base+"-"+nom) : base;
+}
+
+/* Image récapitulative (JPG, A4 paysage) de toutes les audiences d'un
+   périmètre donné (un collège entier, ou un seul conseiller) pour une
+   période — construite sur le même principe que le relevé de vacations
+   (buildVacationsCanvases) : pagination automatique si la période compte
+   beaucoup d'audiences. Une case « Président » ou « Assesseur(s) »
+   incomplète est surlignée en rouge (fond + texte gras) pour bien
+   ressortir à l'impression ; le conseiller qui préside est imprimé en
+   gras pour se distinguer des assesseurs, et chaque nom porte son collège
+   entre parenthèses — « (S) » ou « (E) » — via resolveMemberNameForPrint,
+   puisqu'une même ligne réunit désormais les deux collèges (voir
+   mergePlanningEntriesForDisplay). scopeLabel est déjà mis en forme par
+   l'appelant (ex. « Collège Salarié » ou « MARTIN Alice »). entries doit
+   avoir déjà été fusionné par mergePlanningEntriesForDisplay. */
+function buildPlanningCanvases(periodLabel, scopeLabel, entries){
+  var titleTxt = "Planning — "+(scopeLabel||"—")+" — "+periodLabel;
+  var cphDisp = cphLabel(state.profile);
+  var subTxt = (fullName(state.profile)||"Conseiller(ère) prud’homal(e)") + (cphDisp ? " · CPH de "+cphDisp : "") + (state.profile.section ? " · Section "+state.profile.section : "");
+  var sans = "-apple-system,'Segoe UI',Roboto,Arial,sans-serif";
+  var missingBg = "#F5E1DE", missingText = "#B34D3B";
+
+  var margin = 70;
+  var contentW = A4_IMG_W - margin*2;
+  var cols = [
+    {key:"date", label:"Date", w:120},
+    {key:"type", label:"Type", w:110},
+    {key:"presidence", label:"Présidence", w:170},
+    {key:"president", label:"Président", w:320}
+  ];
+  var fixedW = cols.reduce(function(s,c){ return s+c.w; }, 0);
+  cols.push({key:"assesseurs", label:"Assesseur(s)", w: Math.max(220, contentW-fixedW)});
+
+  var headerBlockH = 68, footerBlockH = 110, tableHeaderRowH = 46;
+  var availH = A4_IMG_H - margin*2 - headerBlockH - footerBlockH;
+
+  var rowH = 34, maxLines = 2;
+  if(Math.floor((availH-tableHeaderRowH)/rowH) < Math.max(entries.length,1)){
+    rowH = 24; maxLines = 1;
+  }
+  var perPage = Math.max(1, Math.floor((availH-tableHeaderRowH)/rowH));
+  var pageCount = Math.max(1, Math.ceil((entries.length||1)/perPage));
+
+  var canvases = [];
+  for(var p=0; p<pageCount; p++){
+    var pageEntries = entries.slice(p*perPage, (p+1)*perPage);
+    var canvas = document.createElement("canvas");
+    canvas.width = A4_IMG_W; canvas.height = A4_IMG_H;
+    var ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,A4_IMG_W,A4_IMG_H);
+
+    var x = margin, y = margin;
+    ctx.fillStyle = "#141414";
+    ctx.font = "700 28px "+sans;
+    ctx.fillText(titleTxt, x, y+30);
+    ctx.fillStyle = "#555";
+    ctx.font = "400 17px "+sans;
+    ctx.fillText(subTxt, x, y+58);
+    if(pageCount>1){
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#777";
+      ctx.font = "400 15px "+sans;
+      ctx.fillText("Page "+(p+1)+" / "+pageCount, margin+contentW, y+30);
+      ctx.textAlign = "left";
+    }
+
+    var tx = margin, ty = margin + headerBlockH;
+    ctx.fillStyle = "#EFEDE7";
+    ctx.fillRect(tx, ty, contentW, tableHeaderRowH);
+    ctx.strokeStyle = "#999"; ctx.lineWidth = 1;
+    ctx.strokeRect(tx, ty, contentW, tableHeaderRowH);
+    ctx.fillStyle = "#1C2024";
+    ctx.font = "700 14px "+sans;
+    var cx = tx;
+    cols.forEach(function(c){
+      var hLines = wrapCanvasText(ctx, c.label, c.w-16, 2);
+      var lh = tableHeaderRowH/(hLines.length+0.8);
+      hLines.forEach(function(ln, li){ ctx.fillText(ln, cx+8, ty + lh*(li+1) - 4); });
+      cx += c.w;
+    });
+
+    var ry = ty + tableHeaderRowH;
+    var normalFont = (maxLines===2 ? "400 14px " : "400 13px ")+sans;
+    var boldFont = (maxLines===2 ? "700 14px " : "700 13px ")+sans;
+    pageEntries.forEach(function(pl, idx){
+      if(idx % 2 === 1){ ctx.fillStyle = "#FAF9F6"; ctx.fillRect(tx, ry, contentW, rowH); }
+      var completeness = mergedEntryCompleteness(pl);
+      var presidentMissing = completeness.presidentMissing;
+      var assesseursMissing = completeness.assesseursMissing;
+
+      var cvals = {
+        date: parseISODate(pl.date).toLocaleDateString("fr-FR"),
+        type: planningTypeLabel(pl.type),
+        presidence: pl.presidence==="Salarié"?"Salariée":pl.presidence==="Employeur"?"Employeur":"—",
+        president: pl.president ? resolveMemberNameForPrint(pl.president) : "Non renseigné",
+        assesseurs: pl.assesseurs.length ? pl.assesseurs.map(resolveMemberNameForPrint).join(" / ") : "Non renseigné"
+      };
+      var ccx = tx;
+      cols.forEach(function(c){
+        var cellW = c.w - 16;
+        var isMissingCell = (c.key==="president" && presidentMissing) || (c.key==="assesseurs" && assesseursMissing);
+        /* Le conseiller qui préside (colonne « Président », quand renseigné)
+           ressort en gras pour se distinguer des assesseurs. */
+        var isPresidingName = c.key==="president" && !!pl.president;
+        if(isMissingCell){
+          ctx.fillStyle = missingBg;
+          ctx.fillRect(ccx+2, ry+2, c.w-4, rowH-4);
+        }
+        ctx.fillStyle = isMissingCell ? missingText : "#26292D";
+        ctx.font = (isMissingCell || isPresidingName) ? boldFont : normalFont;
+        if(c.key === "assesseurs"){
+          var lines = wrapCanvasText(ctx, cvals[c.key], cellW, maxLines);
+          var lh = rowH/(lines.length+0.6);
+          lines.forEach(function(ln, li){ ctx.fillText(ln, ccx+8, ry + lh*(li+1) - 3); });
+        } else {
+          var txt = String(cvals[c.key]);
+          while(txt.length>1 && ctx.measureText(txt).width > cellW){ txt = txt.slice(0,-1); }
+          if(txt !== String(cvals[c.key])) txt = txt.replace(/.$/, "…");
+          ctx.fillText(txt, ccx+8, ry+rowH/2+5);
+        }
+        ccx += c.w;
+      });
+      ry += rowH;
+    });
+    ctx.font = normalFont;
+
+    ctx.strokeStyle = "#CFCBC2";
+    var gy = ty+tableHeaderRowH;
+    for(var i=0;i<=pageEntries.length;i++){ ctx.beginPath(); ctx.moveTo(tx, gy); ctx.lineTo(tx+contentW, gy); ctx.stroke(); gy += rowH; }
+    var gx = tx;
+    ctx.beginPath();
+    cols.forEach(function(c){ ctx.moveTo(gx, ty); ctx.lineTo(gx, ty+tableHeaderRowH+pageEntries.length*rowH); gx+=c.w; });
+    ctx.moveTo(tx+contentW, ty); ctx.lineTo(tx+contentW, ty+tableHeaderRowH+pageEntries.length*rowH);
+    ctx.stroke();
+    ctx.strokeRect(tx, ty, contentW, tableHeaderRowH+pageEntries.length*rowH);
+
+    var fy = A4_IMG_H - margin - footerBlockH + 24;
+    ctx.fillStyle = "#141414";
+    ctx.font = "700 16px "+sans;
+    ctx.fillText(entries.length+" audience(s) au total.", margin, fy);
+    fy += 26;
+
+    /* Légende : un carré de la même couleur que les cases surlignées,
+       pour que le renvoi « conseiller non renseigné » soit repérable au
+       premier coup d’œil plutôt qu’un simple texte coloré. */
+    ctx.fillStyle = missingBg;
+    ctx.fillRect(margin, fy-13, 18, 18);
+    ctx.strokeStyle = missingText; ctx.lineWidth = 1;
+    ctx.strokeRect(margin, fy-13, 18, 18);
+    ctx.fillStyle = "#141414";
+    ctx.font = "600 13px "+sans;
+    ctx.fillText("Conseiller non renseigné", margin+26, fy);
+    fy += 22;
+    ctx.font = "700 13px "+sans;
+    ctx.fillText("Nom en gras : conseiller assurant la présidence.", margin, fy);
+    fy += 20;
+    ctx.fillStyle = "#777";
+    ctx.font = "400 12px "+sans;
+    ctx.fillText("Document généré le "+new Date().toLocaleDateString("fr-FR")+" à partir de l’Outil de planification.", margin, fy);
+
+    canvases.push(canvas);
+  }
+  return canvases;
+}
+
+function showPlanningImageFallback(blobs, baseName){
+  var urls = blobs.map(function(b){ return URL.createObjectURL(b); });
+  var imgs = urls.map(function(u, i){
+    var filename = baseName+(blobs.length>1 ? "-page"+(i+1) : "")+".jpg";
+    return h("div", {style:"margin-bottom:20px;"},
+      blobs.length>1 ? h("p", {class:"lede"}, "Page "+(i+1)+" / "+blobs.length) : null,
+      h("img", {src:u, style:"width:100%; border-radius:8px; border:1px solid var(--divider); display:block; margin-bottom:8px;"}),
+      h("a", {href:u, download:filename, class:"sheet-btn primary", style:"display:block; text-align:center; text-decoration:none; box-sizing:border-box;"}, "Télécharger")
+    );
+  });
+  openSheet("Planning — image à enregistrer", h("div", null,
+    h("p", {class:"lede"}, "Le bouton « Télécharger » sous chaque page tente un enregistrement direct. S’il ne fait rien sur cet appareil, faites un appui long (ou un clic droit) sur l’image, puis « Enregistrer l’image »."),
+    h("div", null, imgs),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Fermer")
+  ));
+}
+
+function exportPlanningImage(periodKey, periodLabel, scopeLabel, scopeSlug, entries){
+  toast("Préparation de l’image…");
+  var canvases = buildPlanningCanvases(periodLabel, scopeLabel, entries);
+  var baseName = planningDocBaseName(periodKey, scopeSlug);
+  Promise.all(canvases.map(function(c){ return canvasToJpegBlob(c, 0.92); })).then(function(blobs){
+    downloadsReady.then(function(){
+      if(!downloadsCap){ showPlanningImageFallback(blobs, baseName); return; }
+      var i = 0;
+      function next(){
+        if(i >= blobs.length){
+          toast(blobs.length>1 ? "Images enregistrées ("+blobs.length+" pages)." : "Image enregistrée.");
+          return;
+        }
+        var suffix = blobs.length>1 ? "-page"+(i+1) : "";
+        downloadsCap.save({ filename:baseName+suffix+".jpg", data:blobs[i] }).then(function(){
+          i++; next();
+        }).catch(function(err){
+          if(err && err.code==="declined"){ toast("Téléchargement annulé."); return; }
+          showPlanningImageFallback(blobs, baseName);
+        });
+      }
+      next();
+    });
+  });
+}
+
+/* Bouton « Envoyer planning au Greffe » (président uniquement, une fois
+   les deux collèges entièrement complétés — voir bothCollegesComplete()
+   dans le renderer). Contrairement à « Imprimer le planning global », qui
+   ne fait que générer l'image, ce bouton l'envoie directement par email au
+   greffier de section (contact enregistré dans « Acteurs de ma section »)
+   — même principe de pièce jointe que les autres boutons d'envoi de
+   l'application. La période est fixée au mois en cours et à venir (comme
+   la diffusion à la section), les deux collèges réunis. */
+function sendPlanningToGreffe(){
+  if(!bothCollegesComplete()){
+    toast("Le planning doit être entièrement complété dans les deux collèges avant l’envoi au greffe.");
+    return;
+  }
+  var to = ((state.sectionRoles && state.sectionRoles.greffier && state.sectionRoles.greffier.email) || "").trim();
+  if(!to){
+    toast("Renseignez d’abord l’email du greffier de section dans « Acteurs de ma section ».");
+    return;
+  }
+  var imageEntries = sectionBroadcastImageEntries();
+  if(imageEntries.length===0){
+    toast("Aucune audience à venir à transmettre au greffe.");
+    return;
+  }
+  toast("Préparation de l’image…");
+  var curMonthKey = monthKey(todayISO());
+  var periodLabel = "À partir de "+monthLabel(curMonthKey);
+  var canvases = buildPlanningCanvases(periodLabel, "Planning transmis au greffe", mergePlanningEntriesForDisplay(imageEntries));
+  var baseName = planningDocBaseName(curMonthKey+"-a-venir", "greffe");
+  var subject = "Planning de la section"+(state.profile.section?" — "+state.profile.section:"")+" — transmission au greffe";
+  Promise.all(canvases.map(function(c){ return canvasToJpegBlob(c, 0.92); })).then(function(blobs){
+    var imageNames = blobs.map(function(b, i){ return baseName+(blobs.length>1 ? "-page"+(i+1) : "")+".jpg"; });
+    var body = "Bonjour,\n\nVeuillez trouver ci-joint le planning complet de la section (mois en cours et à venir, les deux collèges), pour transmission au greffe.\n\n"
+      + "(pensez à joindre manuellement "+(blobs.length>1 ? "les fichiers téléchargés" : "le fichier téléchargé")+" à cet email avant l’envoi)\n\nCordialement.";
+    function openMailto(){
+      var link = "mailto:"+to+"?subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
+      try{ window.location.href = link; }catch(e){}
+    }
+
+    var canShareFiles = false, files = null;
+    try{
+      if(navigator.share && navigator.canShare && typeof File !== "undefined"){
+        files = blobs.map(function(b, i){ return new File([b], imageNames[i], {type:"image/jpeg"}); });
+        canShareFiles = navigator.canShare({files:files});
+      }
+    }catch(e){ canShareFiles = false; }
+
+    if(canShareFiles){
+      navigator.share({files:files, title:subject, text:subject}).catch(function(){
+        saveGreffeImagesThenMailto(blobs, imageNames, openMailto);
+      });
+    } else {
+      saveGreffeImagesThenMailto(blobs, imageNames, openMailto);
+    }
+  });
+}
+function saveGreffeImagesThenMailto(blobs, imageNames, openMailto){
+  if(blobs.length===1){
+    /* Un seul fichier : le téléchargement automatique fonctionne bien
+       dans ce cas (schéma déjà éprouvé ailleurs dans l'application). */
+    toast("Préparation du fichier…");
+    downloadsReady.then(function(){
+      if(!downloadsCap){
+        if(triggerFileDownload(imageNames[0], blobs[0], "image/jpeg")){
+          toast("Fichier « "+imageNames[0]+" » téléchargé — joignez-le à l’email qui s’ouvre.");
+          openMailto();
+        } else {
+          openGreffeImagesSheet(blobs, imageNames, openMailto);
+        }
+        return;
+      }
+      downloadsCap.save({ filename:imageNames[0], data:blobs[0] }).then(function(){
+        toast("Fichier « "+imageNames[0]+" » enregistré — joignez-le à l’email qui s’ouvre.");
+        openMailto();
+      }).catch(function(err){
+        if(err && err.code==="declined"){ toast("Téléchargement annulé."); return; }
+        if(triggerFileDownload(imageNames[0], blobs[0], "image/jpeg")){
+          toast("Fichier « "+imageNames[0]+" » téléchargé — joignez-le à l’email qui s’ouvre.");
+          openMailto();
+        } else {
+          openGreffeImagesSheet(blobs, imageNames, openMailto);
+        }
+      });
+    });
+    return;
+  }
+
+  /* Plusieurs pages : jamais de téléchargements automatiques enchaînés
+     (silencieusement bloqués par la plupart des navigateurs au-delà du
+     premier) — un clic explicite par fichier, comme pour la diffusion à
+     la section. */
+  if(!downloadsCap){
+    openGreffeImagesSheet(blobs, imageNames, openMailto);
+    return;
+  }
+  var files = blobs.map(function(b, i){ return {filename:imageNames[i], data:b}; });
+  toast("Préparation des fichiers…");
+  downloadsReady.then(function(){
+    var i = 0;
+    function next(){
+      if(i >= files.length){
+        toast("Fichiers enregistrés — joignez-les à l’email qui s’ouvre.");
+        openMailto();
+        return;
+      }
+      downloadsCap.save(files[i]).then(function(){
+        i++; next();
+      }).catch(function(err){
+        if(err && err.code==="declined"){ toast("Téléchargement annulé."); return; }
+        openGreffeImagesSheet(blobs, imageNames, openMailto);
+      });
+    }
+    next();
+  });
+}
+function openGreffeImagesSheet(blobs, imageNames, openMailto){
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, "Téléchargez chaque page ci-dessous d’un appui (les téléchargements groupés automatiques sont bloqués par la plupart des navigateurs), puis ouvrez l’email : il ne joint rien automatiquement, pensez à ajouter les fichiers depuis vos téléchargements avant de l’envoyer."));
+  blobs.forEach(function(b, i){
+    var url = URL.createObjectURL(b);
+    body.appendChild(h("div", {style:"margin-bottom:16px;"},
+      blobs.length>1 ? h("p", {class:"lede"}, "Page "+(i+1)+" / "+blobs.length) : null,
+      h("img", {src:url, style:"width:100%; border-radius:8px; border:1px solid var(--divider); display:block; margin-bottom:8px;"}),
+      h("a", {href:url, download:imageNames[i], class:"sheet-btn primary", style:"display:block; text-align:center; text-decoration:none; box-sizing:border-box;"}, "Télécharger « "+imageNames[i]+" »")
+    ));
+  });
+  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:function(){ closeSheet(); openMailto(); }}, "Ouvrir l’email"));
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:10px", onclick:closeSheet}, "Fermer"));
+  openSheet("Planning à transmettre au greffe", body);
+}
+
+var PLANNING_TYPE_ORDER = {"bj":0, "bco":1, "bco-mee":2};
+
+function openPlanningExportSheet(){
+  var mode = "month";
+  var monthVal = planningViewMonth;
+  var yearVal = planningViewMonth.slice(0,4);
+
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, "Toutes les audiences (BJ, BCO, BCO MEE) du collège et de la période choisis apparaîtront sur une même image, triées par date — avec, pour chacune, tous les conseillers renseignés des deux collèges."));
+
+  body.appendChild(h("label", {class:"field-label"}, "Collège"));
+  var collegeOptions = COLLEGES.map(function(c){
+    return h("option", {value:c, selected: c===(state.profile.college||COLLEGES[0]) ? "selected" : null}, c);
+  });
+  collegeOptions.push(h("option", {value:"__both__"}, "Les deux collèges"));
+  var collegeSel = h("select", null, collegeOptions);
+  body.appendChild(collegeSel);
+
+  var modeRow = h("div", {class:"btn-row", style:"margin-bottom:14px; margin-top:14px;"});
+  var fieldBox = h("div", null);
+  body.appendChild(modeRow);
+  body.appendChild(fieldBox);
+
+  var monthBtn = h("button", {class:"sheet-btn small primary", onclick:function(){ mode="month"; updateModeButtons(); updateField(); }}, "Un mois");
+  var yearBtn = h("button", {class:"sheet-btn small ghost", onclick:function(){ mode="year"; updateModeButtons(); updateField(); }}, "Une année entière");
+  var upcomingBtn = h("button", {class:"sheet-btn small ghost", onclick:function(){ mode="upcoming"; updateModeButtons(); updateField(); }}, "Planning à venir");
+  modeRow.appendChild(monthBtn); modeRow.appendChild(yearBtn); modeRow.appendChild(upcomingBtn);
+  function updateModeButtons(){
+    monthBtn.className = "sheet-btn small "+(mode==="month" ? "primary" : "ghost");
+    yearBtn.className = "sheet-btn small "+(mode==="year" ? "primary" : "ghost");
+    upcomingBtn.className = "sheet-btn small "+(mode==="upcoming" ? "primary" : "ghost");
+  }
+
+  var monthInput = null, yearInput = null;
+  function updateField(){
+    clear(fieldBox);
+    if(mode==="month"){
+      fieldBox.appendChild(h("label", {class:"field-label"}, "Mois"));
+      monthInput = h("input", {type:"month", value: monthVal});
+      fieldBox.appendChild(monthInput);
+    } else if(mode==="year"){
+      fieldBox.appendChild(h("label", {class:"field-label"}, "Année"));
+      yearInput = h("input", {type:"number", value: yearVal, min:"2000", max:"2100", step:"1", inputmode:"numeric"});
+      fieldBox.appendChild(yearInput);
+    } else {
+      fieldBox.appendChild(h("div", {class:"footnote", style:"margin:0;"}, "Toutes les audiences à partir du mois en cours ("+monthLabel(monthKey(todayISO()))+"), sans limite de fin."));
+    }
+  }
+  updateField();
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    var periodKey, periodLabel;
+    var collegeValue = collegeSel.value;
+    var curMonthKey = monthKey(todayISO());
+    if(mode==="month"){
+      if(!monthInput.value){ toast("Choisissez un mois."); return; }
+      periodKey = monthInput.value;
+      periodLabel = monthLabel(periodKey);
+    } else if(mode==="year"){
+      var y = String(yearInput.value||"").trim();
+      if(!/^\d{4}$/.test(y)){ toast("Choisissez une année valide."); return; }
+      periodKey = y;
+      periodLabel = "Année "+y;
+    } else {
+      periodKey = curMonthKey+"-a-venir";
+      periodLabel = "À partir de "+monthLabel(curMonthKey);
+    }
+    var both = collegeValue==="__both__";
+    function inPeriod(pl){
+      if(mode==="month") return monthKey(pl.date)===periodKey;
+      if(mode==="year") return pl.date.slice(0,4)===periodKey;
+      return monthKey(pl.date) >= curMonthKey;
+    }
+    /* On détermine d'abord quelles audiences (date+type) sont concernées
+       par le collège choisi, puis on récupère les enregistrements des
+       DEUX collèges pour ces mêmes audiences : ainsi, même en choisissant
+       un seul collège, on affiche tous les conseillers renseignés pour
+       chaque audience (voir mergePlanningEntriesForDisplay) plutôt que
+       seulement ceux du collège sélectionné. */
+    var periodRecords = state.planning.filter(inPeriod);
+    var keys = {};
+    periodRecords.forEach(function(pl){
+      if(both || pl.college===collegeValue) keys[pl.date+"|"+pl.type] = true;
+    });
+    if(Object.keys(keys).length===0){ toast(both ? "Aucune audience enregistrée pour cette période." : "Aucune audience enregistrée pour ce collège sur cette période."); return; }
+    var relevantRecords = periodRecords.filter(function(pl){ return keys[pl.date+"|"+pl.type]; });
+    var entries = mergePlanningEntriesForDisplay(relevantRecords);
+    var collegeSlug = collegeValue==="Salarié" ? "salarie" : collegeValue==="Employeur" ? "employeur" : "tous-colleges";
+    var scopeLabel = both ? "Les deux collèges" : "Collège "+collegeValue;
+    closeSheet();
+    exportPlanningImage(periodKey, periodLabel, scopeLabel, collegeSlug, entries);
+  }}, "Générer l’image"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
+  body.appendChild(actions);
+
+  openSheet("Éditer le planning", body);
+}
+
+/* Même fenêtre d'export que ci-dessus (mois+année ou année), mais limitée
+   aux audiences où un conseiller précis intervient (président ou
+   assesseur) — utilisée depuis sa fiche dans le répertoire de section. */
+function openMemberPlanningExportSheet(member){
+  var mode = "month";
+  var monthVal = monthKey(todayISO());
+  var yearVal = monthVal.slice(0,4);
+  var displayName = memberDisplayName(member) || "ce conseiller";
+
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, "Toutes les audiences (BJ, BCO, BCO MEE) où "+displayName+" intervient, sur la période choisie, apparaîtront sur une même image."));
+
+  var modeRow = h("div", {class:"btn-row", style:"margin-bottom:14px"});
+  var fieldBox = h("div", null);
+  body.appendChild(modeRow);
+  body.appendChild(fieldBox);
+
+  var monthBtn = h("button", {class:"sheet-btn small primary", onclick:function(){ mode="month"; updateModeButtons(); updateField(); }}, "Un mois");
+  var yearBtn = h("button", {class:"sheet-btn small ghost", onclick:function(){ mode="year"; updateModeButtons(); updateField(); }}, "Une année entière");
+  modeRow.appendChild(monthBtn); modeRow.appendChild(yearBtn);
+  function updateModeButtons(){
+    monthBtn.className = "sheet-btn small "+(mode==="month" ? "primary" : "ghost");
+    yearBtn.className = "sheet-btn small "+(mode==="year" ? "primary" : "ghost");
+  }
+
+  var monthInput = null, yearInput = null;
+  function updateField(){
+    clear(fieldBox);
+    if(mode==="month"){
+      fieldBox.appendChild(h("label", {class:"field-label"}, "Mois"));
+      monthInput = h("input", {type:"month", value: monthVal});
+      fieldBox.appendChild(monthInput);
+    } else {
+      fieldBox.appendChild(h("label", {class:"field-label"}, "Année"));
+      yearInput = h("input", {type:"number", value: yearVal, min:"2000", max:"2100", step:"1", inputmode:"numeric"});
+      fieldBox.appendChild(yearInput);
+    }
+  }
+  updateField();
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    var periodKey, periodLabel;
+    if(mode==="month"){
+      if(!monthInput.value){ toast("Choisissez un mois."); return; }
+      periodKey = monthInput.value;
+      periodLabel = monthLabel(periodKey);
+    } else {
+      var y = String(yearInput.value||"").trim();
+      if(!/^\d{4}$/.test(y)){ toast("Choisissez une année valide."); return; }
+      periodKey = y;
+      periodLabel = "Année "+y;
+    }
+    function inPeriod(pl){
+      return mode==="month" ? monthKey(pl.date)===periodKey : pl.date.slice(0,4)===periodKey;
+    }
+    var myRecords = state.planning.filter(function(pl){
+      var involved = pl.president===member.id || pl.assesseurs.indexOf(member.id)!==-1;
+      return involved && inPeriod(pl);
+    });
+    if(myRecords.length===0){ toast("Aucune audience enregistrée pour ce conseiller sur cette période."); return; }
+    /* Comme pour l'export global, on complète chaque audience où ce
+       conseiller intervient avec les conseillers de l'autre collège
+       renseignés pour la même date+type, afin d'afficher la composition
+       complète plutôt que seulement le collège de ce conseiller. */
+    var keys = {};
+    myRecords.forEach(function(pl){ keys[pl.date+"|"+pl.type] = true; });
+    var relevantRecords = state.planning.filter(function(pl){
+      return keys[pl.date+"|"+pl.type] && inPeriod(pl);
+    });
+    var entries = mergePlanningEntriesForDisplay(relevantRecords);
+    var scopeSlug = sanitizeFilenamePart(member.nom || member.prenom || "conseiller");
+    closeSheet();
+    exportPlanningImage(periodKey, periodLabel, displayName, scopeSlug, entries);
+  }}, "Générer l’image"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
+  body.appendChild(actions);
+
+  openSheet("Éditer le planning — "+displayName, body);
+}
+
+renderers["liens-utiles"] = function(root){
+  var p = state.profile;
+  var links = [
+    {icon:"ic-globe", label:"Site web du CPH", sub:"Informations et actualités de votre conseil", url:p.cphWebUrl},
+    {icon:"ic-users", label:"Annuaire du CPH", sub:"Coordonnées des conseillers", url:p.annuaireUrl},
+    {icon:"ic-book", label:"Formation ENM", sub:"Plateforme e-formation de l’ENM", url:p.formationEnmUrl},
+    {icon:"ic-scale", label:"Légifrance", sub:"Textes de loi en vigueur", url:p.legifranceUrl},
+    {icon:"ic-building", label:"ENSAP / Bulletins de paie", sub:"Bulletins de paie et carrière", url:p.ensapUrl}
+  ];
+  var visible = links.filter(function(l){ return l.url; });
+
+  if(visible.length===0){
+    root.appendChild(h("div", {class:"init-empty"},
+      h("p", null, "Aucun lien n’est renseigné pour l’instant. Ajoutez-les dans Réglages → Paramètres avancés.")
+    ));
+    return;
+  }
+
+  root.appendChild(h("p", {class:"lede"}, "Accès rapide aux ressources en ligne utiles à votre section."));
+  var panel = h("div", {class:"panel"});
+  visible.forEach(function(l){
+    panel.appendChild(h("a", {href:l.url, target:"_blank", rel:"noopener", class:"row-click link-row"},
+      h("div", {class:"ic"}, icon(l.icon)),
+      h("div", {class:"rc-main"},
+        h("div", {class:"rc-title"}, l.label),
+        h("div", {class:"rc-sub"}, l.sub)
+      ),
+      icon("ic-chev", "chev")
+    ));
+  });
+  root.appendChild(panel);
+
+  if(visible.length < links.length){
+    root.appendChild(h("div", {class:"footnote"}, "D’autres liens apparaîtront ici dès qu’ils seront renseignés dans Réglages → Paramètres avancés."));
+  }
 };
 
 renderers["admin-cph"] = function(root){
@@ -2565,6 +5142,127 @@ function boolField(label, value, onSet){
     )
   );
 }
+/* Sélecteur à choix multiples (plus de deux options), même principe visuel
+   que boolField ci-dessus. Utilisé pour la fonction en section, qui n'est
+   plus un simple oui/non depuis l'introduction du rôle de vice-président. */
+function choiceField(label, value, options, onSet){
+  return h("div", null,
+    h("label", {class:"field-label"}, label),
+    h("div", {class:"chip-row"},
+      options.map(function(opt){
+        var c = h("span", {class:"chip"+(value===opt.key?" active":"")}, opt.label);
+        c.addEventListener("click", function(){ onSet(opt.key); });
+        return c;
+      })
+    )
+  );
+}
+/* Pavé de signature manuscrite (Réglages > Signature). L'utilisateur trace
+   sa signature au doigt (ou à la souris) sur un <canvas>, via les
+   événements Pointer (couvrent souris/tactile/stylet en une seule API).
+   Le tracé n'est enregistré dans le profil (en PNG data-URL) qu'au clic
+   sur « Enregistrer » — tant que ce n'est pas fait, rien n'est persisté.
+   Une fois enregistrée, la signature est apposée automatiquement sur le
+   relevé de vacations (RITA), en plus de la mention de validation
+   horodatée déjà existante (voir buildVacationsCanvases / printVacations). */
+function buildSignaturePanel(p){
+  var panel = h("div", {class:"panel"});
+  var previewWrap = h("div", null);
+  var padWrap = h("div", {style:"display:none;"});
+  var canvas = h("canvas", {style:"display:block; width:100%; height:160px; border:1px solid var(--divider); border-radius:8px; background:#fff; touch-action:none; cursor:crosshair;"});
+  var ctx2d = null, drawing = false, hasDrawn = false, lastX = 0, lastY = 0;
+
+  function setupCanvas(){
+    var rect = canvas.getBoundingClientRect();
+    var w = Math.max(1, rect.width), dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(w*dpr);
+    canvas.height = Math.round(160*dpr);
+    ctx2d = canvas.getContext("2d");
+    ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx2d.lineWidth = 2.4;
+    ctx2d.lineCap = "round";
+    ctx2d.lineJoin = "round";
+    ctx2d.strokeStyle = "#141414";
+    ctx2d.fillStyle = "#ffffff";
+    ctx2d.fillRect(0, 0, w, 160);
+    hasDrawn = false;
+  }
+  function posFromEvent(e){
+    var rect = canvas.getBoundingClientRect();
+    return { x: e.clientX-rect.left, y: e.clientY-rect.top };
+  }
+  canvas.addEventListener("pointerdown", function(e){
+    e.preventDefault();
+    if(canvas.setPointerCapture){ try{ canvas.setPointerCapture(e.pointerId); }catch(err){} }
+    drawing = true;
+    var pos = posFromEvent(e); lastX = pos.x; lastY = pos.y;
+  });
+  canvas.addEventListener("pointermove", function(e){
+    if(!drawing) return;
+    e.preventDefault();
+    var pos = posFromEvent(e);
+    ctx2d.beginPath(); ctx2d.moveTo(lastX, lastY); ctx2d.lineTo(pos.x, pos.y); ctx2d.stroke();
+    lastX = pos.x; lastY = pos.y; hasDrawn = true;
+  });
+  function endStroke(){ drawing = false; }
+  canvas.addEventListener("pointerup", endStroke);
+  canvas.addEventListener("pointerleave", endStroke);
+  canvas.addEventListener("pointercancel", endStroke);
+
+  function showPreview(){
+    clear(previewWrap);
+    if(p.signature){
+      previewWrap.appendChild(h("div", {class:"footnote", style:"margin-bottom:6px;"}, "Signature enregistrée :"));
+      previewWrap.appendChild(h("img", {src:p.signature, style:"display:block; max-width:220px; max-height:90px; border:1px solid var(--divider); border-radius:8px; background:#fff; padding:6px; margin-bottom:10px;"}));
+    } else {
+      previewWrap.appendChild(h("div", {class:"footnote", style:"margin-bottom:10px;"}, "Aucune signature enregistrée pour l’instant — elle est facultative, mais permet de faire apparaître une signature manuscrite sur votre relevé de vacations plutôt qu'un document à imprimer et signer à la main."));
+    }
+    previewWrap.appendChild(h("div", {class:"btn-row"},
+      h("button", {class:"sheet-btn ghost", onclick:function(){
+        previewWrap.style.display = "none"; padWrap.style.display = "";
+        setTimeout(setupCanvas, 0);
+      }}, p.signature ? "Modifier la signature" : "Ajouter une signature"),
+      p.signature ? h("button", {class:"sheet-btn danger", onclick:function(){
+        openSheet("Supprimer la signature", h("div", null,
+          h("p", {class:"lede"}, "Votre relevé de vacations n’inclura plus de signature manuscrite à partir de maintenant."),
+          h("button", {class:"sheet-btn danger", onclick:function(){ p.signature=""; saveState(); closeSheet(); render("settings"); }}, "Supprimer"),
+          h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+        ));
+      }}, "Supprimer") : null
+    ));
+    previewWrap.style.display = ""; padWrap.style.display = "none";
+  }
+
+  padWrap.appendChild(h("div", {class:"footnote", style:"margin-bottom:8px;"}, "Tracez votre signature au doigt (ou à la souris) dans le cadre ci-dessous."));
+  padWrap.appendChild(canvas);
+  padWrap.appendChild(h("div", {class:"btn-row", style:"margin-top:10px;"},
+    h("button", {class:"sheet-btn ghost", onclick:function(){ setupCanvas(); }}, "Effacer"),
+    h("button", {class:"sheet-btn primary", onclick:function(){
+      if(!hasDrawn){ toast("Dessinez votre signature avant d’enregistrer."); return; }
+      p.signature = canvas.toDataURL("image/png");
+      saveState();
+      toast("Signature enregistrée.");
+      showPreview();
+    }}, "Enregistrer la signature"),
+    h("button", {class:"sheet-btn ghost", onclick:function(){ showPreview(); }}, "Annuler")
+  ));
+
+  showPreview();
+  panel.appendChild(previewWrap);
+  panel.appendChild(padWrap);
+  panel.appendChild(h("div", {class:"footnote", style:"margin-top:10px;"}, "Stockée uniquement sur cet appareil, comme le reste de vos données — jamais transmise ailleurs qu’apposée sur vos propres documents générés."));
+  return panel;
+}
+
+/* Un seul rôle possible par profil : aucun, président ou vice-président de
+   section. Le président crée et répartit les audiences pour son propre
+   collège ; le vice-président complète ensuite le collège opposé, sans
+   pouvoir créer de nouvelles dates (voir renderers["planification"]). */
+var SECTION_ROLE_CHOICES = [
+  {key:"none", label:"Aucun"},
+  {key:"president", label:"Président(e)"},
+  {key:"vice-president", label:"Vice-président(e)"}
+];
 
 renderers.settings = function(root){
   var p = state.profile;
@@ -2599,7 +5297,10 @@ renderers.settings = function(root){
     h("input", {type:"text", value:p.prenom, oninput:function(e){ p.prenom=e.target.value; saveState(); }}),
     h("label", {class:"field-label"}, "Nom"),
     h("input", {type:"text", value:p.nom, oninput:function(e){ p.nom=e.target.value; saveState(); }}),
-    h("label", {class:"field-label"}, "Collège"),
+    h("label", {class:"field-label"}, "Téléphone"),
+    h("input", {type:"tel", placeholder:"06 12 34 56 78", value:p.tel, oninput:function(e){ p.tel=e.target.value; saveState(); }}),
+    h("div", {class:"footnote"}, "Si vous êtes président(e) de section, ce numéro est transmis avec le fichier « Partager avec la section » — il permet aux conseillers de vous notifier un échange d’audience par SMS."),
+    h("label", {class:"field-label", style:"margin-top:12px"}, "Collège"),
     h("select", {onchange:function(e){ p.college=e.target.value; saveState(); }},
       h("option", {value:""}, "— Non précisé —"),
       COLLEGES.map(function(c){ return h("option", {value:c, selected: c===p.college?"selected":null}, c); })),
@@ -2629,6 +5330,9 @@ renderers.settings = function(root){
     h("div", {class:"footnote"}, "Liste établie à partir de sources publiques ; en cas de fusion récente ou d’erreur, utilisez « Autre / non listé ».")
   ));
 
+  root.appendChild(h("div", {class:"section-title"}, "Signature"));
+  root.appendChild(buildSignaturePanel(p));
+
   root.appendChild(h("div", {class:"section-title"}, "Activité salariée"));
   var workPanel = h("div", {class:"panel"});
   workPanel.appendChild(boolField("Êtes-vous rémunéré(e) en tant que salarié(e) ?", p.remunere, function(v){ p.remunere=v; if(!v){ p.poste=null; } saveState(); render("settings"); }));
@@ -2656,7 +5360,7 @@ renderers.settings = function(root){
 
   root.appendChild(h("div", {class:"section-title"}, "Fonctions au CPH"));
   var fnPanel = h("div", {class:"panel"});
-  fnPanel.appendChild(boolField("Président(e) de section ?", p.presidentSection, function(v){ p.presidentSection=v; saveState(); render("settings"); }));
+  fnPanel.appendChild(choiceField("Fonction en section", p.sectionRole, SECTION_ROLE_CHOICES, function(v){ p.sectionRole=v; saveState(); render("settings"); }));
   fnPanel.appendChild(h("div", {style:"margin-top:14px"}, boolField("Président(e) de CPH ?", p.presidentCph, function(v){ p.presidentCph=v; saveState(); render("settings"); })));
   fnPanel.appendChild(h("div", {style:"margin-top:14px"}, boolField("Référiste ?", p.referiste, function(v){ p.referiste=v; saveState(); render("settings"); })));
   root.appendChild(fnPanel);
@@ -2676,12 +5380,8 @@ renderers.settings = function(root){
   root.appendChild(themePanel);
 
   root.appendChild(h("div", {class:"section-title"}, "Vos données"));
-  root.appendChild(h("p", {class:"lede"}, "Tout est enregistré uniquement sur cet appareil, sans serveur. Exportez régulièrement une sauvegarde pour ne rien perdre si vous changez d’appareil ou videz les données du navigateur."));
+  root.appendChild(h("p", {class:"lede"}, "Tout est enregistré uniquement sur cet appareil, sans serveur. La sauvegarde de vos données se trouve en haut de cette page — vous pouvez ici restaurer une sauvegarde existante ou réinitialiser l’application."));
   var dataPanel = h("div", {class:"panel"});
-  dataPanel.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
-    var data = JSON.stringify(state, null, 2);
-    saveFile("cph-toolbox-sauvegarde-"+todayISO(), "json", null, data);
-  }}, "Exporter une sauvegarde (JSON)"));
   var fileIn = h("input", {type:"file", accept:"application/json", style:"display:none", onchange:function(e){
     var file = e.target.files[0]; if(!file) return;
     var reader = new FileReader();
@@ -2723,7 +5423,7 @@ renderers.settings = function(root){
   advPanel.appendChild(h("input", {type:"email", placeholder:"nom@exemple.fr", value:p.vacationsEmail, oninput:function(e){ p.vacationsEmail=e.target.value; saveState(); }}));
   advPanel.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Adresse mail président CPH"));
   advPanel.appendChild(h("input", {type:"email", placeholder:"nom@exemple.fr", value:p.presidentEmail, oninput:function(e){ p.presidentEmail=e.target.value; saveState(); }}));
-  advPanel.appendChild(h("div", {class:"footnote", style:"margin-top:8px"}, "Se remplissent automatiquement pour certains CPH (ex. Béziers) lors de la sélection ci-dessus — modifiables librement. L’adresse email de vacations sert au bouton « Envoyer » du relevé RITA ; l’adresse du président alimente le bouton « Question » de l’accueil."));
+  advPanel.appendChild(h("div", {class:"footnote", style:"margin-top:8px"}, "Se remplissent automatiquement pour certains CPH (ex. Béziers) lors de la sélection ci-dessus — modifiables librement. L’adresse email de vacations sert au bouton « Envoyer » du relevé RITA."));
   advPanel.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Lien html vers Formation ENM"));
   advPanel.appendChild(h("input", {type:"url", placeholder:"https://…", value:p.formationEnmUrl, oninput:function(e){ p.formationEnmUrl=e.target.value; saveState(); }}));
   advPanel.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Lien html vers Legifrance"));
