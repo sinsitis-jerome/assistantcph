@@ -1,0 +1,8 @@
+[{
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+          "namespace": "android_app",
+          "package_name": "io.github.sinsitisjerome.assistantcph",
+          "sha256_cert_fingerprints": ["86:32:E5:6B:45:8A:F2:8E:CF:1A:8C:5C:75:0F:03:56:DC:49:E9:C5:F6:62:A5:87:D1:42:4C:9F:A1:BF:6B:DA"]
+    }
+}]
