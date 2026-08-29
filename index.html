@@ -8,9 +8,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#1C2024">
-  <link rel="manifest" href="manifest.json">
-  <link rel="icon" href="icons/favicon.ico">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/favicon.ico">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -361,7 +361,18 @@
     font-family:var(--font-mono);
   }
   .step-card.done .step-num{ background:var(--green-glow); color:var(--green); }
+  .step-check{ width:22px; height:22px; accent-color:var(--accent-2); flex:none; }
+  .step-card.done .step-head h3{ color:var(--text-muted); text-decoration:line-through; text-decoration-color:var(--divider); }
   .step-head h3{ font-size:.98rem; flex:1; }
+  .pf-tag{ font-family:var(--font-mono); font-size:.62rem; letter-spacing:.03em; text-transform:uppercase; padding:3px 7px; border-radius:6px; flex:none; white-space:nowrap; }
+  .pf-tag.cat-informatique{ background:var(--blue-glow); color:var(--blue); }
+  .pf-tag.cat-rdv{ background:var(--accent-glow); color:var(--accent-2); }
+  .pf-tag.cat-contact{ background:var(--green-glow); color:var(--green); }
+  .pf-tag.cat-formalite{ background:var(--orange-glow); color:var(--orange); }
+  .pf-ref{ font-family:var(--font-mono); font-size:.7rem; padding:4px 8px; border-radius:6px; background:var(--panel-2); color:var(--text-muted); display:inline-block; margin-top:6px; }
+  .pf-phase-head{ display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin:22px 0 10px; }
+  .pf-phase-head:first-of-type{ margin-top:0; }
+  .pf-phase-when{ font-size:.74rem; color:var(--text-muted); font-family:var(--font-mono); white-space:nowrap; }
   .chev{ width:16px; height:16px; color:var(--text-faint); transition:transform .2s ease; flex:none; }
   .step-card.open .step-head .chev{ transform:rotate(90deg); }
   .step-body{ display:none; margin-top:12px; padding-top:12px; border-top:1px solid var(--divider); }
@@ -796,6 +807,98 @@ var BCO_STEPS = [
   ]}
 ];
 
+/* Checklist « Prise de fonction » (Administrer le CPH) — les démarches à
+   accomplir en prenant ses fonctions (président de CPH, etc.). Chaque
+   item est à la fois cochable (progression persistée dans
+   state.priseFonction.checked, par id) et cliquable pour déplier son
+   détail, sur le même modèle visuel que les étapes BJ/BCO ci-dessus mais
+   sans checklist imbriquée : ici, l’étape entière est l’unité à cocher.
+   Vide pour l’instant — à compléter avec les étapes fournies par
+   l’utilisateur (voir renderers["prise-fonction"] pour l’état vide). */
+var PRISE_FONCTION_STEPS = [
+  {
+    id:"pf-p0", title:"Avant l’assemblée générale", when:"Décembre – début janvier",
+    items:[
+      {id:"pf-p0-1", cat:"formalite", title:"Caler la date avec le greffe", desc:"L’assemblée générale d’élection du président et du vice-président se tient chaque année en janvier. Fixer la date exacte avec le directeur de greffe et bloquer la salle d’audience.", ref:"Art. R1423-13 C. trav."},
+      {id:"pf-p0-2", cat:"rdv", title:"Rendez-vous de passation", desc:"Voir avec le président sortant (ou faire le point soi-même en cas de reconduction) : dossiers sensibles, points de vigilance, rythme des audiences, dossiers en attente de départage."},
+      {id:"pf-p0-3", cat:"contact", title:"Contacter le vice-président pressenti", desc:"Convenir de la répartition des tâches et de l’alternance annuelle entre collège salarié et collège employeur.", ref:"Art. R1423-13 C. trav."},
+      {id:"pf-p0-4", cat:"rdv", title:"Rendez-vous avec le directeur de greffe", desc:"Préparer l’organisation matérielle de l’assemblée générale et de l’audience solennelle (convocations, salle, procès-verbaux)."},
+      {id:"pf-p0-5", cat:"formalite", title:"Prendre connaissance des fiches IGJ", desc:"Consulter les fiches pratiques de l’Inspection générale de la justice utiles à la prise de fonction (organisation, déontologie, points de vigilance)."},
+      {id:"pf-p0-6", cat:"formalite", title:"Prendre connaissance des chantiers en cours", desc:"Faire le point avec la présidence sortante sur les dossiers et projets en cours qu’il faudra poursuivre ou clôturer."},
+      {id:"pf-p0-7", cat:"formalite", title:"Prendre connaissance de la documentation", desc:"Parcourir la documentation de présidence existante (procédures internes, modèles, historique) laissée par vos prédécesseurs."},
+      {id:"pf-p0-8", cat:"informatique", title:"Prendre connaissance du répertoire présidence", desc:"Se familiariser avec l’arborescence du répertoire numérique de la présidence (dossiers partagés, archives, modèles de documents)."},
+      {id:"pf-p0-9", cat:"informatique", title:"Prendre connaissance des outils", desc:"Passer en revue les outils numériques utilisés par la présidence (messagerie, agendas, logiciel métier du greffe) et vérifier l’accès à chacun."},
+      {id:"pf-p0-10", cat:"informatique", title:"Obtenir les accès boîte gmail présidence", desc:"Demander la transmission des identifiants de la boîte Gmail de la présidence, ou une délégation d’accès si elle reste gérée par un tiers.", cphOnly:["Béziers"]},
+      {id:"pf-p0-11", cat:"informatique", title:"Se former à Google Blogger", desc:"Prendre en main l’interface de Blogger utilisée pour publier l’Infod’homale et les actualités du conseil.", cphOnly:["Béziers"]},
+      {id:"pf-p0-12", cat:"informatique", title:"Se former à Google Forms", desc:"Prendre en main Google Forms, utilisé notamment pour le quizz mensuel et les sondages auprès des conseillers.", cphOnly:["Béziers"]},
+      {id:"pf-p0-13", cat:"formalite", title:"Prendre connaissance des incidents de l’année", desc:"Faire le point sur les incidents d’audience ou de fonctionnement survenus dans l’année écoulée, et sur la façon dont ils ont été traités."},
+      {id:"pf-p0-14", cat:"formalite", title:"Prendre connaissance des données de gestion", desc:"Consulter les indicateurs de gestion du conseil (volumes d’audiences, délais, statistiques d’activité) pour prendre la mesure de l’activité."},
+      {id:"pf-p0-15", cat:"contact", title:"Intégrer le réseau présidences 34", desc:"Se rapprocher des présidents des conseils de prud’hommes du département pour intégrer leurs échanges et réseaux d’entraide.", cphOnly:["Béziers","Montpellier","Sète"]}
+    ]
+  },
+  {
+    id:"pf-p1", title:"Le jour de l’installation", when:"Assemblée générale + audience solennelle",
+    items:[
+      {id:"pf-p1-1", cat:"formalite", title:"Assemblée générale d’élection", desc:"Présidée par le doyen d’âge ; scrutin secret par collège, majorité absolue aux deux premiers tours puis relative au troisième. L’assemblée ne doit pas se scinder en deux salles distinctes.", ref:"Art. R1423-13 à R1423-22 C. trav."},
+      {id:"pf-p1-2", cat:"formalite", title:"Procès-verbal transmis sous 48 heures", desc:"Faire établir le procès-verbal de l’assemblée générale (et des assemblées de section) et vérifier son envoi, dans les 48 heures, au premier président de la cour d’appel.", ref:"Art. R1423-13 C. trav."},
+      {id:"pf-p1-3", cat:"rdv", title:"Audience solennelle de janvier", desc:"Rapport d’activité du président sortant, lecture des résultats de l’élection, passation symbolique de la présidence devant l’assemblée."},
+      {id:"pf-p1-4", cat:"contact", title:"Informer la cour d’appel", desc:"Signaler officiellement l’installation au premier président de la cour d’appel de Montpellier et au procureur général."},
+      {id:"pf-p1-5", cat:"contact", title:"Informer le parquet local", desc:"Prévenir le procureur de la République près le tribunal judiciaire de Béziers de la nouvelle présidence."},
+      {id:"pf-p1-6", cat:"informatique", title:"Mise à jour du statut sur le logiciel métier", desc:"Demander au greffe la mise à jour des droits « président » sur l’application de gestion du conseil, seul le greffe étant habilité à administrer ces comptes."}
+    ]
+  },
+  {
+    id:"pf-p2", title:"Première semaine", when:"J+1 à J+7",
+    items:[
+      {id:"pf-p2-1", cat:"informatique", title:"Reprendre la messagerie de présidence", desc:"Créer ou reprendre la main sur l’adresse dédiée à la présidence, et configurer les délégations d’accès utiles (vice-président, greffe)."},
+      {id:"pf-p2-2", cat:"informatique", title:"Vérifier les agendas partagés", desc:"Contrôler les droits de partage et d’édition sur le calendrier personnel, le calendrier de la présidence et le calendrier commun du tribunal."},
+      {id:"pf-p2-3", cat:"informatique", title:"Mettre à jour l’annuaire des conseillers", desc:"Vérifier que le fichier source de l’annuaire est à jour (arrivées, départs, collèges, sections) avant tout envoi collectif."},
+      {id:"pf-p2-4", cat:"informatique", title:"Sécuriser les accès", desc:"Changer les mots de passe des comptes de présidence, activer la double authentification si possible, dresser la liste des personnes habilitées."},
+      {id:"pf-p2-5", cat:"rdv", title:"Tour des présidents de section", desc:"Rendez-vous individuel avec chaque président de section : effectifs, organisation, difficultés en cours."},
+      {id:"pf-p2-6", cat:"rdv", title:"Répartition des tâches avec le greffe", desc:"Formaliser avec le directeur de greffe la répartition administrative et la signature des états mensuels de travail et documents budgétaires."},
+      {id:"pf-p2-7", cat:"contact", title:"Informer les organisations représentées", desc:"Prévenir les organisations syndicales de salariés et les organisations patronales de l’installation de la nouvelle présidence et des canaux de communication à privilégier."},
+      {id:"pf-p2-8", cat:"contact", title:"Se présenter au bâtonnier", desc:"Prendre contact avec le bâtonnier de l’ordre des avocats du barreau de Béziers pour évoquer le fonctionnement courant de la juridiction."}
+    ]
+  },
+  {
+    id:"pf-p3", title:"Premier mois", when:"Semaines 2 à 4",
+    items:[
+      {id:"pf-p3-1", cat:"rdv", title:"Calendrier annuel avec le vice-président", desc:"Arrêter ensemble le calendrier des audiences, des permanences de conciliation et des référés pour l’année."},
+      {id:"pf-p3-2", cat:"rdv", title:"Réunion générale des conseillers", desc:"Présenter à l’ensemble des conseillers les priorités de la présidence et le calendrier de l’année."},
+      {id:"pf-p3-3", cat:"contact", title:"Contact avec les CPH voisins", desc:"Prendre contact avec les présidents des conseils de prud’hommes du ressort de la cour d’appel pour échanger sur les pratiques."},
+      {id:"pf-p3-4", cat:"contact", title:"Signalement institutionnel si requis", desc:"Vérifier si une communication à la DREETS ou à la Direction générale du travail est attendue pour la composition du bureau."},
+      {id:"pf-p3-5", cat:"informatique", title:"Adapter les outils numériques de la présidence", desc:"Finaliser pour l’année en cours les outils de mailing, de newsletter interne et de planification des audiences ; vérifier leur bon fonctionnement de bout en bout."},
+      {id:"pf-p3-6", cat:"informatique", title:"Prévoir la visioconférence si besoin", desc:"Vérifier l’accès aux outils de communication à distance pour les échanges avec la cour d’appel ou les réunions inter-juridictions."},
+      {id:"pf-p3-7", cat:"formalite", title:"Délégations de signature", desc:"Signer avec le directeur de greffe les délégations nécessaires (états de frais, indemnités des conseillers)."},
+      {id:"pf-p3-8", cat:"formalite", title:"Autorisations d’absence des conseillers salariés", desc:"Vérifier, pour les conseillers salariés qui en ont besoin, la situation des autorisations d’absence auprès de leur employeur."}
+    ]
+  },
+  {
+    id:"pf-p4", title:"En continu", when:"Tout au long du mandat",
+    items:[
+      {id:"pf-p4-1", cat:"rdv", title:"Points d’étape réguliers avec le greffe", desc:"Réunions périodiques de suivi de l’activité et du budget avec le directeur de greffe."},
+      {id:"pf-p4-2", cat:"contact", title:"Lien courant avec la cour d’appel", desc:"Transmission régulière des documents statistiques et des rapports d’activité attendus."},
+      {id:"pf-p4-3", cat:"informatique", title:"Maintenance annuelle des accès", desc:"Renouveler les mots de passe, mettre à jour l’annuaire, sauvegarder les dossiers et modèles utilisés par la présidence."},
+      {id:"pf-p4-4", cat:"formalite", title:"Préparer l’alternance suivante", desc:"Anticiper, avant janvier prochain, la passation vers le vice-président dans le cadre de l’alternance annuelle de la présidence.", ref:"Art. R1423-13 C. trav."}
+    ]
+  }
+];
+var PF_CAT_LABEL = { informatique:"Informatique", rdv:"Rendez-vous", contact:"Contact", formalite:"Formalité" };
+function pfAllItems(){
+  var out = [];
+  PRISE_FONCTION_STEPS.forEach(function(ph){ ph.items.forEach(function(it){ out.push(it); }); });
+  return out;
+}
+/* Certaines étapes (ex. accès Gmail présidence, réseau des présidences 34)
+   ne concernent que les conseillers d’un CPH donné ; cphOnly liste les CPH
+   concernés (comparé à profile.cph). Sans cphOnly, l’étape est universelle. */
+function pfItemVisible(item){
+  return !item.cphOnly || item.cphOnly.indexOf(state.profile.cph)!==-1;
+}
+function pfVisibleItems(){
+  return pfAllItems().filter(pfItemVisible);
+}
+
 /* =================================================================
    ÉTAT & PERSISTANCE
    ================================================================= */
@@ -858,7 +961,8 @@ var DEFAULT_STATE = {
      notification d'échange. */
   myPlanning:{ importedAt:null, from:"", fromTel:"", section:"", cph:"", entries:[], members:[] },
   bj:{ checked:[], startedAt:null },
-  bco:{ checked:[], startedAt:null }
+  bco:{ checked:[], startedAt:null },
+  priseFonction:{ checked:[], startedAt:null }
 };
 
 function migrate(parsed){
@@ -1038,6 +1142,10 @@ function migrate(parsed){
     if(parsed.bco && typeof parsed.bco==="object"){
       s.bco.checked = Array.isArray(parsed.bco.checked) ? parsed.bco.checked.map(String) : [];
       s.bco.startedAt = parsed.bco.startedAt || null;
+    }
+    if(parsed.priseFonction && typeof parsed.priseFonction==="object"){
+      s.priseFonction.checked = Array.isArray(parsed.priseFonction.checked) ? parsed.priseFonction.checked.map(String) : [];
+      s.priseFonction.startedAt = parsed.priseFonction.startedAt || null;
     }
   }
   return s;
@@ -1363,7 +1471,8 @@ var SCREEN_TITLES = {
   bco:"Présider un BCO", refs:"Textes de référence", phrases:"Phrases rituelles", settings:"Réglages",
   "admin-section":"Administrer ma section", "admin-cph":"Administrer le CPH", stats:"Statistiques",
   "liens-utiles":"Liens utiles", "section-membres":"Acteurs de ma section",
-  "planification":"Outil de planification", "mon-planning":"Mon planning"
+  "planification":"Outil de planification", "mon-planning":"Mon planning",
+  "prise-fonction":"Prise de fonction"
 };
 var renderers = {};
 
@@ -2890,28 +2999,6 @@ renderers.phrases = function(root){
    Contenu à préciser avec l’utilisateur — pour l’instant, un espace
    d’accueil qui explique le module et recueille les pistes envisagées.
    ================================================================= */
-function renderAdminPlaceholder(root, opts){
-  root.appendChild(h("div", {class:"banner blue"},
-    h("span", null, h("b", null, "Module en construction. "), opts.intro)
-  ));
-  root.appendChild(h("div", {class:"section-title"}, "Pistes possibles"));
-  var panel = h("div", {class:"panel"});
-  opts.ideas.forEach(function(idea){
-    var row = h("div", {class:"row-click"},
-      h("div", {class:"rc-main"},
-        h("div", {class:"rc-title"}, idea.title),
-        h("div", {class:"rc-sub"}, idea.sub)
-      ),
-      icon("ic-chev", "chev")
-    );
-    row.addEventListener("click", function(){
-      toast("Bientôt disponible — dites-moi si c’est utile pour "+opts.pronoun+".");
-    });
-    panel.appendChild(row);
-  });
-  root.appendChild(panel);
-  root.appendChild(h("div", {class:"footnote"}, "Dites-moi ce qui vous serait le plus utile ici — je construis ce module avec vous."));
-}
 
 renderers["admin-section"] = function(root){
   root.appendChild(h("div", {class:"banner blue"},
@@ -5118,16 +5205,124 @@ renderers["liens-utiles"] = function(root){
 };
 
 renderers["admin-cph"] = function(root){
-  renderAdminPlaceholder(root, {
-    pronoun:"le CPH",
-    intro:"Un espace pour coordonner l’ensemble du conseil — à construire ensemble.",
-    ideas:[
-      {title:"Sections et présidents", sub:"Vue d’ensemble de l’organisation du CPH"},
-      {title:"Statistiques d’activité", sub:"Volumes d’audiences, délais, tendances"},
-      {title:"Annuaire des conseillers", sub:"Tous collèges et sections confondus"},
-      {title:"Documents et procédures", sub:"Ressources communes au conseil"}
-    ]
+  root.appendChild(h("div", {class:"banner blue"},
+    h("span", null, h("b", null, "Module en construction. "), "Un espace pour coordonner l’ensemble du conseil — à construire ensemble.")
+  ));
+
+  root.appendChild(h("div", {class:"section-title"}, "Prise de fonction"));
+  var pfPanel = h("div", {class:"panel"});
+  var pfDone = state.priseFonction.checked.length;
+  var pfTotal = pfVisibleItems().length;
+  pfPanel.appendChild(h("div", {class:"row-click", onclick:function(){ go("prise-fonction"); }},
+    h("div", {class:"rc-main"},
+      h("div", {class:"rc-title"}, "Checklist de prise de fonction"),
+      h("div", {class:"rc-sub"}, pfTotal ? pfDone+" / "+pfTotal+" étapes réalisées" : "Démarches à accomplir en prenant vos fonctions")
+    ),
+    icon("ic-chev", "chev")
+  ));
+  root.appendChild(pfPanel);
+
+  root.appendChild(h("div", {class:"section-title"}, "Pistes possibles"));
+  var ideasPanel = h("div", {class:"panel"});
+  [
+    {title:"Sections et présidents", sub:"Vue d’ensemble de l’organisation du CPH"},
+    {title:"Statistiques d’activité", sub:"Volumes d’audiences, délais, tendances"},
+    {title:"Annuaire des conseillers", sub:"Tous collèges et sections confondus"},
+    {title:"Documents et procédures", sub:"Ressources communes au conseil"}
+  ].forEach(function(idea){
+    var row = h("div", {class:"row-click"},
+      h("div", {class:"rc-main"},
+        h("div", {class:"rc-title"}, idea.title),
+        h("div", {class:"rc-sub"}, idea.sub)
+      ),
+      icon("ic-chev", "chev")
+    );
+    row.addEventListener("click", function(){
+      toast("Bientôt disponible — dites-moi si c’est utile pour le CPH.");
+    });
+    ideasPanel.appendChild(row);
   });
+  root.appendChild(ideasPanel);
+  root.appendChild(h("div", {class:"footnote"}, "Dites-moi ce qui vous serait le plus utile ici — je construis ce module avec vous."));
+};
+
+/* =================================================================
+   ÉCRAN — PRISE DE FONCTION (checklist, sous Administrer le CPH)
+   Contenu organisé en phases chronologiques (PRISE_FONCTION_STEPS,
+   plus haut). Chaque item de phase est l’unité cochée : une case à
+   cocher sur l’en-tête + un détail dépliable (description + référence
+   légale le cas échéant), pas de sous-checklist. Certains items sont
+   réservés à un ou plusieurs CPH précis (cphOnly) ; pfVisibleItems()
+   aplatit et filtre les items visibles pour l’utilisateur courant.
+   ================================================================= */
+function updatePriseFonctionProgress(){
+  var items = pfVisibleItems();
+  var gs = state.priseFonction;
+  var done = items.filter(function(it){ return gs.checked.indexOf(it.id)!==-1; }).length;
+  var fill = document.getElementById("pf-progress-fill");
+  var label = document.getElementById("pf-progress-label");
+  if(fill) fill.style.width = (items.length ? Math.round(done/items.length*100) : 0)+"%";
+  if(label) label.textContent = done+" / "+items.length+" étapes réalisées";
+}
+renderers["prise-fonction"] = function(root){
+  var gs = state.priseFonction;
+  var items = pfVisibleItems();
+
+  root.appendChild(h("p", {class:"lede"}, "Les démarches à accomplir en prenant vos fonctions. Cochez chaque étape une fois réalisée ; touchez son titre pour en voir le détail."));
+
+  if(items.length===0){
+    root.appendChild(h("div", {class:"banner blue"},
+      h("span", null, h("b", null, "Contenu à venir. "), "Cette checklist sera complétée avec les étapes de prise de fonction — dites-moi lesquelles inclure et je les ajoute ici.")
+    ));
+    return;
+  }
+
+  root.appendChild(h("div", {class:"panel", style:"margin:16px 0"},
+    h("div", {style:"display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px"},
+      h("span", {style:"font-size:.8rem;font-weight:600"}, "Progression"),
+      h("span", {id:"pf-progress-label", style:"font-size:.74rem;color:var(--text-muted)"}, "")
+    ),
+    h("div", {class:"progress-track"}, h("div", {id:"pf-progress-fill", class:"progress-fill", style:"width:0%"}))
+  ));
+
+  PRISE_FONCTION_STEPS.forEach(function(phase){
+    var visibleItems = phase.items.filter(pfItemVisible);
+    if(visibleItems.length===0) return;
+
+    root.appendChild(h("div", {class:"pf-phase-head"},
+      h("span", {class:"section-title", style:"margin:0"}, phase.title),
+      h("span", {class:"pf-phase-when"}, phase.when)
+    ));
+
+    visibleItems.forEach(function(item){
+      var isDone = gs.checked.indexOf(item.id)!==-1;
+      var card = h("div", {class:"step-card"+(isDone?" done":""), id:"pf-card-"+item.id});
+      var checkbox = h("input", {class:"step-check", type:"checkbox", checked: isDone?"checked":null});
+      checkbox.addEventListener("click", function(e){ e.stopPropagation(); });
+      checkbox.addEventListener("change", function(e){
+        var idx = gs.checked.indexOf(item.id);
+        if(e.target.checked && idx===-1) gs.checked.push(item.id);
+        if(!e.target.checked && idx!==-1) gs.checked.splice(idx,1);
+        saveState();
+        card.classList.toggle("done", e.target.checked);
+        updatePriseFonctionProgress();
+      });
+      var blocks = [{t:"p", v:item.desc}];
+      var body = h("div", {class:"step-body"});
+      body.appendChild(renderBlocks(blocks, item.id));
+      if(item.ref) body.appendChild(h("span", {class:"pf-ref"}, item.ref));
+      var head = h("div", {class:"step-head", onclick:function(){ card.classList.toggle("open"); }},
+        checkbox,
+        h("h3", null, item.title),
+        h("span", {class:"pf-tag cat-"+item.cat}, PF_CAT_LABEL[item.cat]||item.cat),
+        icon("ic-chev", "chev")
+      );
+      card.appendChild(head); card.appendChild(body);
+      root.appendChild(card);
+    });
+  });
+
+  setTimeout(updatePriseFonctionProgress, 0);
 };
 
 /* =================================================================
@@ -5472,5 +5667,4 @@ window.__cph = { h:h, icon:icon, clear:clear, toast:toast, openSheet:openSheet, 
 render("home");
 
 })();
-</script>
-</html>
+</script></html>
