@@ -431,6 +431,17 @@
   #toast.show{ opacity:1; transform:translate(-50%,0); }
 
   .footnote{ font-size:.7rem; color:var(--text-faint); line-height:1.5; margin-top:18px; }
+  /* Petit bouton icône discret, en bas de certaines pages (ex. import
+     JSON de la liste des conseillers) : volontairement peu visible,
+     pour une action secondaire réservée à qui la cherche. */
+  .discreet-icon-btn{
+    display:flex; align-items:center; justify-content:center;
+    width:30px; height:30px; margin:22px auto 0; border-radius:50%;
+    background:none; border:1px solid var(--divider); color:var(--text-faint);
+    cursor:pointer; opacity:.6; transition:opacity .15s ease;
+  }
+  .discreet-icon-btn:hover, .discreet-icon-btn:focus-visible{ opacity:1; }
+  .discreet-icon-btn svg{ width:15px; height:15px; }
   .icn{ display:inline-flex; }
   .icn svg{ display:block; }
   .search-wrap{ position:relative; margin-bottom:14px; }
@@ -457,6 +468,7 @@
   <symbol id="ic-question" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.3 9.3a2.7 2.7 0 115 1.5c0 1.7-2.5 1.8-2.5 3.7"/><circle cx="12" cy="17.2" r="0.15" fill="currentColor" stroke="none"/></symbol>
   <symbol id="ic-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16h16"/><rect x="7.5" y="12.5" width="3" height="5"/><rect x="12.5" y="9" width="3" height="8.5"/><rect x="17.5" y="6" width="3" height="11.5"/></symbol>
   <symbol id="ic-calendar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4M16 3v4"/></symbol>
+  <symbol id="ic-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"/><path d="M7.5 8.5L12 4l4.5 4.5"/><path d="M4 15v3.5A2.5 2.5 0 006.5 21h11a2.5 2.5 0 002.5-2.5V15"/></symbol>
 </svg>
 
 <div id="app">
@@ -3196,6 +3208,92 @@ function openSectionMemberForm(existing){
   openSheet(isEdit ? "Modifier le conseiller" : "Nouveau conseiller", form);
 }
 
+/* =================================================================
+   IMPORT JSON DE LA LISTE DES CONSEILLERS (bouton discret, réservé au
+   président de section, en bas de « Acteurs de ma section »).
+   Deux formes de fichier acceptées, pour rester compatible aussi bien
+   avec un fichier préparé à la main qu'avec un export déjà produit par
+   l'application (sectionBroadcastPayload / collegeBroadcastPayload,
+   qui portent tous deux un tableau "members") :
+     - un tableau brut  [{nom, prenom, college, syndicat, email, tel}, …]
+     - un objet portant un tableau "members" de cette même forme.
+   ================================================================= */
+function normalizeMembersImportPayload(parsed){
+  var list = Array.isArray(parsed) ? parsed
+    : (parsed && Array.isArray(parsed.members)) ? parsed.members
+    : null;
+  if(!list) return null;
+  return list
+    .filter(function(m){ return m && typeof m==="object" && ((m.nom||"").toString().trim() || (m.prenom||"").toString().trim()); })
+    .map(function(m){
+      var college = (m.college||"").toString().trim();
+      return {
+        nom: (m.nom||"").toString().trim(),
+        prenom: (m.prenom||"").toString().trim(),
+        college: COLLEGES.indexOf(college)!==-1 ? college : "",
+        syndicat: (m.syndicat||"").toString().trim(),
+        email: (m.email||"").toString().trim(),
+        tel: (m.tel||"").toString().trim()
+      };
+    });
+}
+/* Fusionne la liste importée dans state.sectionMembers : un conseiller
+   existant (même nom+prénom+collège, comparaison insensible à la casse)
+   est mis à jour (seuls les champs non vides du fichier écrasent les
+   champs existants — un champ vide dans le fichier ne supprime jamais
+   une information déjà enregistrée) ; sinon une nouvelle fiche est
+   créée. Jamais destructeur : aucune fiche existante n'est supprimée. */
+function mergeMembersImport(list){
+  var stats = { added:0, updated:0 };
+  function norm(s){ return (s||"").trim().toLocaleLowerCase("fr-FR"); }
+  list.forEach(function(m){
+    var existing = state.sectionMembers.filter(function(x){
+      return norm(x.nom)===norm(m.nom) && norm(x.prenom)===norm(m.prenom) && (x.college||"")===m.college;
+    })[0];
+    if(existing){
+      if(m.syndicat) existing.syndicat = m.syndicat;
+      if(m.email) existing.email = m.email;
+      if(m.tel) existing.tel = m.tel;
+      stats.updated++;
+    } else {
+      state.sectionMembers.push({ id:uid(), nom:m.nom, prenom:m.prenom, college:m.college, syndicat:m.syndicat, email:m.email, tel:m.tel });
+      stats.added++;
+    }
+  });
+  return stats;
+}
+function openMembersImportConfirm(list){
+  if(list.length===0){
+    toast("Fichier lisible, mais aucun conseiller n’y a été trouvé.");
+    return;
+  }
+  openSheet("Importer des conseillers", h("div", null,
+    h("p", {class:"lede"}, list.length+(list.length>1 ? " conseillers trouvés dans le fichier." : " conseiller trouvé dans le fichier.")),
+    h("p", {class:"lede"}, "Les fiches existantes (même nom, prénom et collège) seront complétées — les champs déjà renseignés dans l’application ne sont jamais effacés par un champ vide du fichier. Les nouveaux conseillers seront ajoutés. Rien n’est jamais supprimé par cet import."),
+    h("button", {class:"sheet-btn primary", onclick:function(){
+      var stats = mergeMembersImport(list);
+      saveState(); closeSheet(); render("section-membres");
+      toast(stats.added+" conseiller(s) ajouté(s), "+stats.updated+" mis à jour.");
+    }}, "Importer"),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+  ));
+}
+function handleMembersImportFile(file){
+  var reader = new FileReader();
+  reader.onload = function(){
+    try{
+      var parsed = JSON.parse(reader.result);
+      var list = normalizeMembersImportPayload(parsed);
+      if(!list){
+        toast("Fichier illisible — attendu : un tableau de conseillers, ou un export de l’application contenant un tableau « members ».");
+        return;
+      }
+      openMembersImportConfirm(list);
+    }catch(err){ toast("Fichier illisible — vérifiez qu’il s’agit bien d’un fichier JSON."); }
+  };
+  reader.readAsText(file);
+}
+
 function memberSortCompare(a, b){
   var an = (a.nom||"").toLocaleLowerCase("fr-FR"), bn = (b.nom||"").toLocaleLowerCase("fr-FR");
   if(an !== bn) return an < bn ? -1 : 1;
@@ -3465,6 +3563,20 @@ function renderPresidentMembersTable(root, members){
 
   root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){ openSectionMemberForm(null); }},
     "+ Créer un conseiller"));
+
+  /* Bouton discret d'import JSON de la liste des conseillers, réservé au
+     président de section — voir handleMembersImportFile ci-dessus. */
+  var membersImportInput = h("input", {type:"file", accept:"application/json", style:"display:none", onchange:function(e){
+    var file = e.target.files[0]; if(!file) return;
+    handleMembersImportFile(file);
+    e.target.value = "";
+  }});
+  root.appendChild(membersImportInput);
+  root.appendChild(h("button", {
+    class:"discreet-icon-btn", type:"button",
+    title:"Importer une liste de conseillers (JSON)", "aria-label":"Importer une liste de conseillers (JSON)",
+    onclick:function(){ membersImportInput.click(); }
+  }, icon("ic-upload")));
 }
 
 /* =================================================================
