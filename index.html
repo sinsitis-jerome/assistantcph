@@ -1002,7 +1002,15 @@ var DEFAULT_STATE = {
   myPlanning:{ importedAt:null, from:"", fromTel:"", section:"", cph:"", entries:[], members:[] },
   bj:{ checked:[], startedAt:null },
   bco:{ checked:[], startedAt:null },
-  priseFonction:{ checked:[], startedAt:null }
+  priseFonction:{ checked:[], startedAt:null },
+  /* Synchronisation chiffrée entre les acteurs d'une même section (voir
+     module SYNC-CRYPTO plus bas) : sectionCode est le jeton partagé (une
+     fois entré, l'app récupère/pousse automatiquement l'annuaire des
+     conseillers et le planning, chiffrés, vers/depuis Firestore) ;
+     lastSyncAt trace la dernière synchronisation réussie, purement
+     informatif. Vide = synchronisation non activée, l'app reste 100%
+     locale comme avant (import/export JSON manuel toujours disponible). */
+  sync:{ sectionCode:"", lastSyncAt:null }
 };
 
 function migrate(parsed){
@@ -1188,6 +1196,10 @@ function migrate(parsed){
       s.priseFonction.checked = Array.isArray(parsed.priseFonction.checked) ? parsed.priseFonction.checked.map(String) : [];
       s.priseFonction.startedAt = parsed.priseFonction.startedAt || null;
     }
+    if(parsed.sync && typeof parsed.sync==="object"){
+      s.sync.sectionCode = typeof parsed.sync.sectionCode==="string" ? parsed.sync.sectionCode : "";
+      s.sync.lastSyncAt = typeof parsed.sync.lastSyncAt==="string" ? parsed.sync.lastSyncAt : null;
+    }
   }
   return s;
 }
@@ -1202,6 +1214,276 @@ function loadState(){
 function saveState(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){} }
 
 var state = loadState();
+
+/* =================================================================
+   SYNCHRONISATION CHIFFRÉE ENTRE ACTEURS D'UNE SECTION (Firebase)
+   ---------------------------------------------------------------
+   Remplace, pour qui l'active, l'échange manuel de fichiers JSON entre
+   président(e), vice-président(e) et conseillers : l'annuaire de la
+   section (sectionMembers) et le planning (planning) se synchronisent
+   automatiquement via un petit document Firestore partagé, identifié et
+   protégé par un unique « code de section ».
+
+   Chiffrement : le contenu (nom, prénom, téléphone, email, syndicat,
+   collège de chaque conseiller + toutes les dates de planning) est
+   entièrement chiffré (AES-GCM 256) sur l'appareil avant tout envoi. La
+   clé est dérivée du code de section lui-même via HKDF-SHA256— un jeton
+   de 128 bits, donc pas besoin de PBKDF2 (réservé aux secrets faibles
+   choisis par un humain). Firestore ne voit et ne stocke jamais que du
+   texte chiffré, plus quelques métadonnées non personnelles (nom du CPH,
+   nom de la section, horodatage). Le code sert AUSSI d'identifiant du
+   document (voir firestore.rules) : sans le connaître, impossible même
+   de localiser le document — Firestore interdit explicitement de lister
+   la collection.
+
+   Modèle d'accès retenu (voir échange avec l'utilisateur) : un seul code
+   par section, qui donne à la fois lecture et écriture à quiconque le
+   détient — pas de compte, pas de mot de passe, pas de Cloud Function
+   (donc aucune carte bancaire requise, tout reste sur l'offre gratuite
+   Firebase). L'application elle-même réserve les écrans de modification
+   au président/vice-président selon le rôle choisi dans les Réglages ;
+   Firestore ne fait pas cette distinction plus finement.
+
+   Le pont vers le SDK Firebase (chargé en module ES, voir tout en bas du
+   fichier) expose window.__fbFirestore une fois prêt ; en son absence
+   (pas encore chargé, ou aucun réseau), toutes les fonctions ci-dessous
+   rejettent proprement leur promesse plutôt que de planter — l'app reste
+   pleinement utilisable hors-ligne, la synchronisation n'est qu'un
+   service en plus. */
+
+var SYNC_SCHEMA_VERSION = 1;
+var SYNC_HKDF_INFO = "cph-toolbox-sync-v1";
+
+function syncBytesToBase64Url(bytes){
+  var bin = "";
+  for(var i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+function syncBase64UrlToBytes(str){
+  var b64 = str.replace(/-/g,"+").replace(/_/g,"/");
+  while(b64.length % 4) b64 += "=";
+  var bin = atob(b64);
+  var bytes = new Uint8Array(bin.length);
+  for(var i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/* Génère un nouveau code de section : 16 octets aléatoires (128 bits),
+   encodés en base64url — utilisé par le président lors de la création
+   d'un nouvel espace partagé pour sa section. */
+function generateSectionCode(){
+  var bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return syncBytesToBase64Url(bytes);
+}
+
+function deriveSyncKey(sectionCode){
+  var codeBytes = syncBase64UrlToBytes(sectionCode);
+  return crypto.subtle.importKey("raw", codeBytes, "HKDF", false, ["deriveKey"]).then(function(ikm){
+    return crypto.subtle.deriveKey(
+      { name:"HKDF", hash:"SHA-256", salt:new Uint8Array(0), info:new TextEncoder().encode(SYNC_HKDF_INFO) },
+      ikm,
+      { name:"AES-GCM", length:256 },
+      false,
+      ["encrypt","decrypt"]
+    );
+  });
+}
+
+function encryptSyncPayload(sectionCode, payloadObj){
+  return deriveSyncKey(sectionCode).then(function(key){
+    var iv = new Uint8Array(12);
+    crypto.getRandomValues(iv);
+    var plaintext = new TextEncoder().encode(JSON.stringify(payloadObj));
+    return crypto.subtle.encrypt({name:"AES-GCM", iv:iv}, key, plaintext).then(function(cipherBuf){
+      return { iv: syncBytesToBase64Url(iv), ciphertext: syncBytesToBase64Url(new Uint8Array(cipherBuf)) };
+    });
+  });
+}
+
+/* Rejette la promesse si le code est incorrect ou si les données ont été
+   altérées : AES-GCM est authentifié, toute modification du texte chiffré
+   fait échouer le déchiffrement plutôt que de renvoyer des données
+   silencieusement fausses. */
+function decryptSyncPayload(sectionCode, envelope){
+  return deriveSyncKey(sectionCode).then(function(key){
+    var iv = syncBase64UrlToBytes(envelope.iv);
+    var cipherBytes = syncBase64UrlToBytes(envelope.ciphertext);
+    return crypto.subtle.decrypt({name:"AES-GCM", iv:iv}, key, cipherBytes).then(function(plainBuf){
+      return JSON.parse(new TextDecoder().decode(plainBuf));
+    });
+  });
+}
+
+/* Ce que la synchronisation transmet : l'annuaire des conseillers et le
+   planning de la section. Les autres données (vacations personnelles,
+   réglages propres à l'appareil, etc.) restent strictement locales. */
+function syncPayloadFromState(){
+  return { sectionMembers: state.sectionMembers, planning: state.planning };
+}
+function applySyncPayloadToState(payload){
+  state.sectionMembers = (payload && Array.isArray(payload.sectionMembers)) ? payload.sectionMembers : [];
+  state.planning = (payload && Array.isArray(payload.planning)) ? payload.planning : [];
+}
+
+function syncAvailable(){ return !!(window.__fbFirestore); }
+
+/* Récupère et déchiffre le document de la section — résout `null` si
+   aucun document n'existe encore pour ce code (première utilisation). */
+function pullSectionSync(sectionCode){
+  if(!syncAvailable()) return Promise.reject(new Error("sync-unavailable"));
+  return window.__fbFirestore.getSectionDoc(sectionCode).then(function(doc){
+    if(!doc) return null;
+    return decryptSyncPayload(sectionCode, {iv:doc.iv, ciphertext:doc.ciphertext}).then(function(payload){
+      return { cph: doc.cph||"", section: doc.section||"", payload: payload };
+    });
+  });
+}
+
+/* Chiffre puis envoie l'état courant (conseillers + planning) vers le
+   document de la section, en écrasant son contenu précédent. */
+function pushSectionSync(sectionCode, cph, sectionName){
+  if(!syncAvailable()) return Promise.reject(new Error("sync-unavailable"));
+  return encryptSyncPayload(sectionCode, syncPayloadFromState()).then(function(envelope){
+    return window.__fbFirestore.setSectionDoc(sectionCode, {
+      cph: cph||"", section: sectionName||"", schemaVersion: SYNC_SCHEMA_VERSION,
+      iv: envelope.iv, ciphertext: envelope.ciphertext
+    });
+  });
+}
+
+function markSyncDone(){
+  state.sync.lastSyncAt = new Date().toISOString();
+  saveState();
+}
+
+/* IMPORTANT — pourquoi il n'y a pas de récupération automatique et
+   silencieuse au lancement : si l'appareil a des modifications locales
+   pas encore envoyées (par ex. une audience ajoutée hors ligne), un pull
+   automatique qui écraserait l'état local les ferait disparaître sans
+   prévenir. On se contente donc, au lancement, d'une simple VÉRIFICATION
+   (métadonnées seulement, aucune donnée rapatriée ni écrasée) : si une
+   version plus récente existe côté serveur, on prévient discrètement —
+   la récupération elle-même reste un geste explicite (Réglages >
+   Synchronisation > « Récupérer la dernière version »), tout comme
+   l'envoi (« Envoyer ma version actuelle »). C'est le prix à payer pour
+   ne jamais risquer de perdre une saisie locale sans le vouloir. */
+window.addEventListener("fb-sync-ready", function(){
+  if(!state.sync.sectionCode) return;
+  window.__fbFirestore.getSectionMeta(state.sync.sectionCode).then(function(meta){
+    if(!meta || !meta.updatedAt) return;
+    var remoteTime = new Date(meta.updatedAt).getTime();
+    var localTime = state.sync.lastSyncAt ? new Date(state.sync.lastSyncAt).getTime() : 0;
+    if(remoteTime > localTime + 2000){ // marge de 2s pour l'horloge serveur
+      toast("Une mise à jour de la section est disponible — Réglages > Synchronisation pour la récupérer.");
+    }
+  }).catch(function(err){
+    if(window.console && console.warn) console.warn("Vérification de synchronisation impossible :", err);
+  });
+});
+
+/* --- Écrans (sheets) et actions déclenchés depuis Réglages > Synchronisation --- */
+
+function openCreateSectionSyncSheet(){
+  if(!syncAvailable()){ toast("Synchronisation indisponible pour le moment (vérifiez votre connexion)."); return; }
+  var cph = cphLabel(state.profile) || state.profile.cph || "";
+  var section = state.profile.section || "";
+  openSheet("Créer un espace pour ma section", h("div", null,
+    h("p", {class:"lede"}, "Un nouveau code va être généré pour "+(section ? ("la section "+section+(cph?" — "+cph:"")) : (cph||"votre section"))+". Partagez-le ensuite avec le vice-président et les conseillers : en le saisissant à leur tour (« Rejoindre avec un code »), ils recevront automatiquement l'annuaire et le planning, et resteront à jour par la suite."),
+    h("button", {class:"sheet-btn accent", onclick:function(){
+      var code = generateSectionCode();
+      pushSectionSync(code, cph, section).then(function(){
+        state.sync.sectionCode = code;
+        markSyncDone();
+        closeSheet();
+        toast("Espace créé — pensez à partager le code ci-dessous.");
+        render("settings");
+      }).catch(function(err){
+        toast("Impossible de créer l'espace pour le moment (pas de connexion ?).");
+      });
+    }}, "Générer et activer"),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+  ));
+}
+
+function openJoinSectionSyncSheet(){
+  if(!syncAvailable()){ toast("Synchronisation indisponible pour le moment (vérifiez votre connexion)."); return; }
+  var codeInput = h("input", {type:"text", placeholder:"Collez le code reçu", style:"font-family:monospace"});
+  openSheet("Rejoindre avec un code", h("div", null,
+    h("p", {class:"lede"}, "Collez ici le code que vous a transmis le président ou le vice-président de la section. L'annuaire des conseillers et le planning actuellement enregistrés sur cet appareil seront remplacés par ceux déjà partagés."),
+    codeInput,
+    h("button", {class:"sheet-btn accent", style:"margin-top:12px", onclick:function(){
+      var code = codeInput.value.trim();
+      if(!code){ toast("Merci de saisir un code."); return; }
+      pullSectionSync(code).then(function(result){
+        if(!result){
+          toast("Aucun espace trouvé pour ce code — vérifiez qu'il est correctement recopié.");
+          return;
+        }
+        applySyncPayloadToState(result.payload);
+        state.sync.sectionCode = code;
+        markSyncDone();
+        closeSheet();
+        toast("Espace rejoint — vos données sont à jour.");
+        render("settings");
+      }).catch(function(err){
+        toast("Échec de la récupération — vérifiez votre connexion, puis réessayez.");
+      });
+    }}, "Rejoindre"),
+    h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler")
+  ));
+}
+
+/* Récupération et envoi restent deux gestes SÉPARÉS et EXPLICITES plutôt
+   qu'un unique bouton « synchroniser » qui ferait les deux à la chaîne :
+   enchaîner un pull puis un push écraserait automatiquement toute
+   modification locale pas encore envoyée avec la version distante avant
+   même d'avoir pu la publier. Séparer les deux laisse à la présidence le
+   choix explicite, dans le rare cas où les deux appareils auraient
+   modifié les données depuis la dernière synchronisation. */
+function confirmAndPullSection(){
+  if(!syncAvailable()){ toast("Synchronisation indisponible pour le moment (vérifiez votre connexion)."); return; }
+  openSheet("Récupérer la dernière version", h("div", null,
+    h("p", {class:"lede"}, "L'annuaire des conseillers et le planning enregistrés sur cet appareil vont être remplacés par la dernière version partagée. Si des modifications locales n'ont pas encore été envoyées, elles seront perdues."),
+    h("button", {class:"sheet-btn accent", onclick:function(){
+      pullSectionSync(state.sync.sectionCode).then(function(result){
+        closeSheet();
+        if(!result){ toast("Aucune donnée trouvée pour ce code."); return; }
+        applySyncPayloadToState(result.payload);
+        markSyncDone();
+        toast("Données récupérées.");
+        render("settings");
+      }).catch(function(err){
+        toast("Échec de la récupération — vérifiez votre connexion.");
+      });
+    }}, "Récupérer et remplacer"),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+  ));
+}
+
+function pushToSectionNow(){
+  if(!syncAvailable()){ toast("Synchronisation indisponible pour le moment (vérifiez votre connexion)."); return; }
+  var cph = cphLabel(state.profile) || state.profile.cph || "";
+  var section = state.profile.section || "";
+  pushSectionSync(state.sync.sectionCode, cph, section).then(function(){
+    markSyncDone();
+    toast("Données envoyées — les autres acteurs les recevront à leur prochaine récupération.");
+    render("settings");
+  }).catch(function(err){
+    toast("Échec de l'envoi — vérifiez votre connexion.");
+  });
+}
+
+function disableSectionSync(){
+  openSheet("Désactiver la synchronisation", h("div", null,
+    h("p", {class:"lede"}, "Vos données resteront sur cet appareil, mais ne se mettront plus à jour automatiquement avec les autres acteurs de la section. Vous pourrez réactiver la synchronisation plus tard avec le même code."),
+    h("button", {class:"sheet-btn danger", onclick:function(){
+      state.sync.sectionCode = ""; state.sync.lastSyncAt = null; saveState();
+      closeSheet(); toast("Synchronisation désactivée."); render("settings");
+    }}, "Désactiver"),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+  ));
+}
 
 /* =================================================================
    CAPACITÉS (downloads)
@@ -6067,6 +6349,34 @@ renderers.settings = function(root){
   }}, "Réinitialiser toutes les données"));
   root.appendChild(dataPanel);
 
+  root.appendChild(h("div", {class:"section-title"}, "Synchronisation avec la section"));
+  var syncPanel = h("div", {class:"panel"});
+  if(!state.sync.sectionCode){
+    syncPanel.appendChild(h("p", {class:"lede", style:"margin:0 0 12px"},
+      "Activez la synchronisation pour que l'annuaire des conseillers et le planning se tiennent à jour entre le président, le vice-président et les conseillers de la section, sans échange de fichier JSON. Les données personnelles (noms, emails, téléphones) sont chiffrées avant tout envoi — voir « Paramètres avancés » ci-dessous pour les détails."));
+    syncPanel.appendChild(h("button", {class:"sheet-btn accent", onclick:openCreateSectionSyncSheet}, "Créer un espace pour ma section"));
+    syncPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:openJoinSectionSyncSheet}, "Rejoindre avec un code reçu"));
+  } else {
+    var syncInfo = h("div", {class:"info-list"});
+    syncInfo.appendChild(h("div", {class:"info-row"},
+      h("div", {class:"info-label"}, "Code de section"),
+      h("div", {class:"info-value", style:"font-family:monospace"}, state.sync.sectionCode)
+    ));
+    syncInfo.appendChild(h("div", {class:"info-row"},
+      h("div", {class:"info-label"}, "Dernière synchro"),
+      h("div", {class:"info-value"}, state.sync.lastSyncAt ? new Date(state.sync.lastSyncAt).toLocaleString("fr-FR") : "Jamais")
+    ));
+    syncPanel.appendChild(syncInfo);
+    syncPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:10px", onclick:function(){
+      copyText(state.sync.sectionCode);
+      toast("Code copié — partagez-le aux autres acteurs de la section.");
+    }}, "Copier le code à partager"));
+    syncPanel.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:confirmAndPullSection}, "Récupérer la dernière version"));
+    syncPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:pushToSectionNow}, "Envoyer ma version actuelle"));
+    syncPanel.appendChild(h("button", {class:"sheet-btn danger", style:"margin-top:8px", onclick:disableSectionSync}, "Désactiver la synchronisation"));
+  }
+  root.appendChild(syncPanel);
+
   root.appendChild(h("div", {class:"section-title"}, "Paramètres avancés"));
   var advPanel = h("div", {class:"panel"});
   advPanel.appendChild(h("label", {class:"field-label"}, "Lien http vers annuaire"));
@@ -6123,4 +6433,71 @@ window.__cph = { h:h, icon:icon, clear:clear, toast:toast, openSheet:openSheet, 
 render("home");
 
 })();
+</script>
+
+<!-- =====================================================================
+     PONT VERS LE SDK FIREBASE — module ES séparé (voir le module
+     SYNCHRONISATION dans le script principal ci-dessus pour le pourquoi).
+     Un script "module" s'exécute après le script classique ci-dessus
+     (jamais avant) : le reste de l'application n'attend jamais ce pont
+     pour s'afficher, elle reste pleinement utilisable même si ce script
+     ne charge pas (pas de réseau, etc.) — la synchronisation est un
+     service en plus, jamais une condition de fonctionnement.
+     ===================================================================== -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+
+  /* Ces valeurs ne sont pas secrètes malgré le nom "apiKey" : Firebase les
+     conçoit pour être visibles publiquement dans le code d'une
+     application cliente (voir la documentation Firebase). La protection
+     des données vient des règles de sécurité Firestore (firestore.rules,
+     fourni séparément) et du chiffrement côté client (module
+     SYNCHRONISATION plus haut) — jamais de la confidentialité de ces
+     identifiants. */
+  var firebaseConfig = {
+    apiKey: "AIzaSyDtsS-Jgg2wX9AlSVccqHyn59JtvSIflSQ",
+    authDomain: "cph-toolbox.firebaseapp.com",
+    projectId: "cph-toolbox",
+    storageBucket: "cph-toolbox.firebasestorage.app",
+    messagingSenderId: "254997006915",
+    appId: "1:254997006915:web:18f0caac41afca6d12a2f6"
+  };
+
+  var app = initializeApp(firebaseConfig);
+  var db = getFirestore(app);
+
+  function tsToIso(ts){
+    try{ return (ts && typeof ts.toDate === "function") ? ts.toDate().toISOString() : null; }catch(e){ return null; }
+  }
+
+  /* API exposée au script principal (classique, non-module) : volontairement
+     réduite à trois fonctions simples qui ne renvoient jamais d'objets
+     propres au SDK Firebase — juste des chaînes/dates JS ordinaires — afin
+     que tout le reste de l'application (chiffrement, logique de
+     synchronisation, interface) reste totalement indépendant du SDK. */
+  window.__fbFirestore = {
+    getSectionDoc: function(sectionCode){
+      return getDoc(doc(db, "sections", sectionCode)).then(function(snap){
+        if(!snap.exists()) return null;
+        var data = snap.data();
+        return {
+          cph: data.cph, section: data.section, iv: data.iv, ciphertext: data.ciphertext,
+          updatedAt: tsToIso(data.updatedAt)
+        };
+      });
+    },
+    getSectionMeta: function(sectionCode){
+      return getDoc(doc(db, "sections", sectionCode)).then(function(snap){
+        if(!snap.exists()) return null;
+        return { updatedAt: tsToIso(snap.data().updatedAt) };
+      });
+    },
+    setSectionDoc: function(sectionCode, data){
+      var payload = Object.assign({}, data, { updatedAt: serverTimestamp() });
+      return setDoc(doc(db, "sections", sectionCode), payload);
+    }
+  };
+
+  window.dispatchEvent(new Event("fb-sync-ready"));
 </script></html>
