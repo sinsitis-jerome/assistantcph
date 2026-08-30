@@ -958,12 +958,19 @@ var DEFAULT_STATE = {
     coPresident:{prenom:"", nom:"", email:"", tel:""}
   },
   planning:[],
-  /* Étape courante du parcours guidé « Outil de planification » côté
-     président (renderers["planification"]) : un seul des 5 boutons
-     d'envoi (partager avec le VP → importer sa réponse → imprimer le
-     planning global → envoyer au greffe → partager avec la section)
-     est affiché à la fois, dans cet ordre ; chaque clic fait avancer
-     l'index (0 à 4), qui boucle sur 0 après le 5e bouton. */
+  /* Étape courante du parcours guidé « Outil de planification »
+     (renderers["planification"]) : un seul bouton d'envoi à la fois,
+     dans l'ordre, chaque clic faisant avancer à l'étape suivante en
+     bouclant sur 0 après la dernière. Un même compteur brut sert aux
+     deux rôles (un profil n'a qu'un seul rôle actif à la fois — voir
+     pStep/vStep dans le rendu) :
+       - côté président (5 étapes) : partager avec le VP → importer sa
+         réponse → imprimer le planning global → envoyer au greffe →
+         partager avec la section ;
+       - côté vice-président (4 étapes) : importer du président →
+         renvoyer au président (désactivé tant que son propre collège
+         n'est pas complet) → générer le planning global → envoyer aux
+         conseillers de son collège. */
   planningFlowStep:0,
   /* Planning personnel d'un conseiller « simple » (sans droits de
      présidence) : une copie en lecture seule, filtrée sur ses propres
@@ -1407,7 +1414,13 @@ function triggerInstallPrompt(){
 }
 if("serviceWorker" in navigator && hasManifest()){
   window.addEventListener("load", function(){
-    navigator.serviceWorker.register("sw.js").catch(function(){});
+    /* updateViaCache:"none" empêche le navigateur de réutiliser une copie
+       de sw.js issue de son cache HTTP pour la vérification de mise à
+       jour : sans cela, une nouvelle version publiée peut mettre jusqu'à
+       24h (ou la durée du cache HTTP) à être détectée. */
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(function(reg){
+      if(reg && reg.update){ reg.update().catch(function(){}); }
+    }).catch(function(){});
   });
 }
 
@@ -3902,10 +3915,15 @@ function openPlanningRoleImportConfirm(payload, expectedRole, withStubs){
       var stats = mergePlanningImport(payload);
       var stubsAdded = withStubs ? createOwnCollegeStubs(payload) : 0;
       /* Import réellement confirmé (pas seulement le sélecteur de fichier
-         ouvert) : c'est ici, pour l'import côté président uniquement, que
-         le parcours guidé de « Outil de planification » avance vers
-         l'étape suivante (« Imprimer le planning global »). */
-      if(expectedRole==="vice-president") state.planningFlowStep = (state.planningFlowStep+1) % 5;
+         ouvert) : c'est ici, pour les deux parcours guidés (président
+         important la réponse du vice-président, et vice-président
+         important le fichier du président), que « Outil de
+         planification » avance vers l'étape suivante — pStep/vStep sont
+         calculés modulo la longueur de chaque parcours au moment du
+         rendu, donc incrémenter le même compteur brut convient aux deux
+         rôles sans se marcher dessus (un profil n'a qu'un seul rôle actif
+         à la fois). */
+      if(expectedRole==="vice-president" || expectedRole==="president") state.planningFlowStep = state.planningFlowStep + 1;
       saveState(); closeSheet(); render("planification");
       var msg = stats.membersAdded+" conseiller(s) ajouté(s), "+stats.membersUpdated+" mis à jour · "
         + stats.entriesAdded+" audience(s) ajoutée(s), "+stats.entriesUpdated+" mise(s) à jour.";
@@ -4026,6 +4044,77 @@ function shareSectionBroadcast(){
     shareSectionBroadcastFiles(json, jsonFilename, subject, blobs, imageBaseName);
   });
 }
+
+/* Variante de sectionBroadcastPayload/sectionBroadcastImageEntries pour le
+   dernier bouton du parcours guidé du vice-président : lui ne diffuse pas
+   toute la section (il n'a pas forcément la vue complète de l'autre
+   collège) mais uniquement les conseillers et audiences de SON PROPRE
+   collège, à destination des conseillers de ce même collège. */
+function collegeBroadcastPayload(){
+  var myCollege = state.profile.college || "";
+  var members = state.sectionMembers
+    .filter(function(m){ return (m.college||"")===myCollege; })
+    .map(function(m){
+      return { nom:m.nom||"", prenom:m.prenom||"", college:m.college||"", syndicat:m.syndicat||"", email:m.email||"", tel:m.tel||"" };
+    });
+  var planning = state.planning
+    .filter(function(p){ return (p.college||"")===myCollege; })
+    .map(function(p){
+      return {
+        type: p.type, date: p.date, college: p.college||"", presidence: p.presidence||"",
+        president: resolveMemberForExport(p.president),
+        assesseurs: (p.assesseurs||[]).map(resolveMemberForExport).filter(Boolean)
+      };
+    });
+  return {
+    schema: "cph-planning-broadcast.v1",
+    exportedAt: new Date().toISOString(),
+    section: state.profile.section||"",
+    cph: cphLabel(state.profile),
+    from: fullName(state.profile),
+    fromTel: state.profile.tel||"",
+    members: members,
+    planning: planning
+  };
+}
+function collegeBroadcastImageEntries(){
+  var myCollege = state.profile.college || "";
+  var curMonthKey = monthKey(todayISO());
+  return state.planning.filter(function(pl){
+    return (pl.college||"")===myCollege && monthKey(pl.date) >= curMonthKey;
+  });
+}
+/* Bouton « Envoyer aux conseillers de mon collège » (vice-président) :
+   même mécanique que shareSectionBroadcast, mais restreinte à son propre
+   collège — les fonctions d'envoi de fichiers (shareSectionBroadcastFiles
+   et compagnie) sont génériques et donc réutilisées telles quelles. */
+function shareCollegeBroadcast(){
+  var payload = collegeBroadcastPayload();
+  if(payload.planning.length===0 && payload.members.length===0){
+    toast("Rien à partager pour l’instant : ajoutez au moins une audience ou un conseiller de votre collège.");
+    return;
+  }
+  var json = JSON.stringify(payload, null, 2);
+  var nom = sanitizeFilenamePart(state.profile.nom);
+  var jsonFilename = "planning-college"+(nom?"-"+nom:"")+".json";
+  var subject = "Planning du collège "+(state.profile.college||"")+(payload.section?" — "+payload.section:"");
+
+  var imageEntries = collegeBroadcastImageEntries();
+  if(imageEntries.length===0){
+    shareSectionBroadcastFiles(json, jsonFilename, subject, [], "");
+    return;
+  }
+
+  toast("Préparation de l’image…");
+  var curMonthKey = monthKey(todayISO());
+  var periodLabel = "À partir de "+monthLabel(curMonthKey);
+  var canvases = buildPlanningCanvases(periodLabel, "Collège "+(state.profile.college||""), mergePlanningEntriesForDisplay(imageEntries));
+  var imageBaseName = planningDocBaseName(curMonthKey+"-a-venir", "college");
+  Promise.all(canvases.map(function(c){ return canvasToJpegBlob(c, 0.92); })).then(function(blobs){
+    shareSectionBroadcastFiles(json, jsonFilename, subject, blobs, imageBaseName);
+  });
+}
+
 function shareSectionBroadcastFiles(json, jsonFilename, subject, imageBlobs, imageBaseName){
   var imageNames = imageBlobs.map(function(b, i){
     return imageBaseName+(imageBlobs.length>1 ? "-page"+(i+1) : "")+".jpg";
@@ -4611,14 +4700,39 @@ renderers["planification"] = function(root){
     }});
     root.appendChild(presidentImportInput);
 
-    buttons.push({label:"Importer du président", cls:"ghost", onclick:function(){ presidentImportInput.click(); }});
+    /* Parcours guidé du vice-président, même principe que celui du
+       président ci-dessus (un seul bouton affiché à la fois, dans
+       l’ordre) : 1. importer le fichier du président, 2. compléter les
+       audiences de son propre collège (matérialisé ici par le bouton
+       « Renvoyer » resté désactivé tant que ce n’est pas fait), 3.
+       renvoyer au président, 4. générer le planning global, 5. l’envoyer
+       aux conseillers de son propre collège — puis retour au 1er. */
+    var vSteps = [
+      { label:"Importer du président", cls:"ghost", onclick:function(){ presidentImportInput.click(); } },
+      {
+        label:"Renvoyer au président", cls:"ghost",
+        disabled: !complete,
+        title: complete ? "" : "Complétez d’abord toutes les audiences de votre collège.",
+        onclick:function(){ sharePlanningWithCounterpart(); }
+      },
+      { label:"Générer le planning global", cls:"primary", onclick:function(){ openPlanningExportSheet(); } },
+      { label:"Envoyer aux conseillers de mon collège", cls:"ghost", onclick:function(){ shareCollegeBroadcast(); } }
+    ];
+    var vStep = state.planningFlowStep % vSteps.length;
+    var vCurrent = vSteps[vStep];
+    /* Comme côté président, l’étape « Importer du président » (index 0)
+       ne fait qu’ouvrir le sélecteur de fichier : l’avancée réelle a
+       lieu au clic sur « Confirmer l’import » (voir
+       openPlanningRoleImportConfirm), pas ici. */
     buttons.push({
-      label:"Renvoyer au président", cls:"ghost",
-      disabled: !complete,
-      title: complete ? "" : "Complétez d’abord toutes les audiences de votre collège.",
-      onclick:function(){ sharePlanningWithCounterpart(); }
+      label: vCurrent.label, cls: vCurrent.cls, disabled: vCurrent.disabled, title: vCurrent.title,
+      onclick: vStep===0 ? vCurrent.onclick : function(){
+        vCurrent.onclick();
+        state.planningFlowStep = (vStep+1) % vSteps.length;
+        saveState();
+        render("planification");
+      }
     });
-    buttons.push({label:"Imprimer le planning global", cls:"primary", onclick:function(){ openPlanningExportSheet(); }});
   } else {
     root.appendChild(h("div", {class:"footnote"}, "Renseignez votre fonction en section (Président(e) ou Vice-président(e)) dans les Paramètres pour accéder aux outils de partage du planning."));
   }
