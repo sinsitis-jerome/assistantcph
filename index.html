@@ -446,6 +446,7 @@
   .icn svg{ display:block; }
   .search-wrap{ position:relative; margin-bottom:14px; }
   .search-wrap svg{ position:absolute; left:12px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--text-faint); }
+  .month-nav-label svg{ width:14px; height:14px; color:var(--text-muted); flex:none; }
   .search-wrap input{ padding-left:34px; }
 </style></head><body>
 
@@ -4803,6 +4804,31 @@ renderers["mon-planning"] = function(root){
   root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:16px", onclick:function(){ refreshInput.click(); }}, "Importer une nouvelle version"));
 };
 
+/* Sheet « Aller à un mois » de l'outil de planification : les flèches
+   ←/→ (shiftMonthKey) restent pratiques pour naviguer de proche en
+   proche, mais deviennent fastidieuses pour atteindre un mois éloigné —
+   ce sélecteur permet d'y aller directement, mois et année à la fois. */
+function openPlanningMonthPicker(){
+  var input = h("input", {type:"month", value: planningViewMonth});
+  var body = h("div", null,
+    h("label", {class:"field-label"}, "Mois"),
+    input,
+    h("div", {style:"margin-top:18px"},
+      h("button", {class:"sheet-btn primary", onclick:function(){
+        if(!input.value){ toast("Choisissez un mois."); return; }
+        planningViewMonth = input.value;
+        closeSheet(); render("planification");
+      }}, "Aller à ce mois"),
+      h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
+        planningViewMonth = monthKey(todayISO());
+        closeSheet(); render("planification");
+      }}, "Revenir au mois en cours"),
+      h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler")
+    )
+  );
+  openSheet("Aller à un mois", body);
+}
+
 renderers["planification"] = function(root){
   root.appendChild(h("p", {class:"lede"}, "Programmez les BJ, BCO et BCO MEE de la section et répartissez présidences et assesseurs — les propositions se classent selon la charge déjà enregistrée de chaque conseiller."));
 
@@ -4818,7 +4844,11 @@ renderers["planification"] = function(root){
       planningViewMonth = shiftMonthKey(planningViewMonth, -1);
       render("planification");
     }}, "←"),
-    h("div", {style:"flex:1;text-align:center;font-weight:600;font-size:.88rem"}, monthLabel(planningViewMonth)),
+    h("div", {
+      class:"month-nav-label",
+      style:"flex:1;text-align:center;font-weight:600;font-size:.88rem;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;",
+      onclick:openPlanningMonthPicker
+    }, icon("ic-calendar"), monthLabel(planningViewMonth)),
     h("button", {class:"sheet-btn ghost small", onclick:function(){
       planningViewMonth = shiftMonthKey(planningViewMonth, 1);
       render("planification");
