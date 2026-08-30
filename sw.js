@@ -7,7 +7,7 @@
    Pensez à incrémenter CACHE_NAME à chaque nouvelle version envoyée aux
    testeurs : cela force la suppression de l'ancien cache et le
    téléchargement de la nouvelle version au prochain lancement. */
-var CACHE_NAME = "cph-toolbox-v23";
+var CACHE_NAME = "cph-toolbox-v24";
 var CORE_ASSETS = [
   "./",
   "./index.html",
@@ -45,7 +45,11 @@ self.addEventListener("fetch", function(event){
 
   if(req.mode === "navigate"){
     event.respondWith(
-      fetch(req).then(function(res){
+      /* cache:"no-store" force un vrai aller-retour réseau (contourne le
+         cache HTTP du navigateur, pas seulement le Cache Storage), pour
+         que la dernière version publiée soit toujours servie quand
+         l'appareil est en ligne. */
+      fetch(req, { cache: "no-store" }).then(function(res){
         var copy = res.clone();
         caches.open(CACHE_NAME).then(function(cache){ cache.put("./index.html", copy); });
         return res;
