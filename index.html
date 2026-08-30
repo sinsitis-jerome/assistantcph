@@ -906,11 +906,24 @@ function pfVisibleItems(){
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function fullName(p){ return [p.prenom, p.nom].filter(Boolean).join(" ").trim(); }
 function cphLabel(p){ return p.cph===CPH_AUTRE ? (p.cphAutre||"") : (p.cph||""); }
+/* « Administrer le CPH » est en cours de construction : tant que le
+   contenu n’est pas finalisé, seul le développeur de l’app (identifié
+   par son prénom/nom de profil) y a accès en pratique — les autres
+   utilisateurs voient la tuile grisée. Comparaison insensible à la
+   casse et aux accents pour rester robuste à la saisie. */
+function normName(s){ return (s||"").normalize("NFD").replace(/\p{Diacritic}/gu,"").trim().toLowerCase(); }
+function isAppOwner(){
+  var p = state.profile;
+  return normName(p.prenom)==="jerome" && normName(p.nom)==="piquer";
+}
+/* Tous les champs des Réglages jusqu'à « Fonctions au CPH » inclus sont
+   obligatoires pour activer l'application, à l'exception d'« Êtes-vous
+   posté(e) ? » et des horaires de travail habituels (tous deux
+   volontairement facultatifs — voir le panneau « Activité salariée »). */
 function isProfileComplete(p){
-  if(!p.prenom.trim() || !p.nom.trim() || !p.college || !p.section || !p.cph) return false;
+  if(!p.prenom.trim() || !p.nom.trim() || !p.tel.trim() || !p.college || !p.section || !p.cph) return false;
   if(p.cph===CPH_AUTRE && !p.cphAutre.trim()) return false;
   if(p.remunere===null) return false;
-  if(p.remunere===true && p.poste===null) return false;
   if(p.sectionRole===null || p.presidentCph===null || p.referiste===null) return false;
   return true;
 }
@@ -919,7 +932,7 @@ function clone(o){ return JSON.parse(JSON.stringify(o)); }
 
 var DEFAULT_STATE = {
   v:1,
-  theme:"system",
+  theme:"dark",
   profile:{
     prenom:"", nom:"", tel:"", college:"", section:"", cph:"", cphAutre:"",
     remunere:null, poste:null, horaireDebut:"", horaireFin:"",
@@ -945,6 +958,13 @@ var DEFAULT_STATE = {
     coPresident:{prenom:"", nom:"", email:"", tel:""}
   },
   planning:[],
+  /* Étape courante du parcours guidé « Outil de planification » côté
+     président (renderers["planification"]) : un seul des 5 boutons
+     d'envoi (partager avec le VP → importer sa réponse → imprimer le
+     planning global → envoyer au greffe → partager avec la section)
+     est affiché à la fois, dans cet ordre ; chaque clic fait avancer
+     l'index (0 à 4), qui boucle sur 0 après le 5e bouton. */
+  planningFlowStep:0,
   /* Planning personnel d'un conseiller « simple » (sans droits de
      présidence) : une copie en lecture seule, filtrée sur ses propres
      audiences, importée depuis un fichier reçu de la présidence de
@@ -1069,6 +1089,7 @@ function migrate(parsed){
         };
       }).filter(function(pl){ return pl.date; });
     }
+    s.planningFlowStep = (typeof parsed.planningFlowStep==="number" && parsed.planningFlowStep>=0 && parsed.planningFlowStep<=4) ? Math.floor(parsed.planningFlowStep) : 0;
     if(parsed.myPlanning && typeof parsed.myPlanning==="object"){
       var mp = parsed.myPlanning;
       s.myPlanning.importedAt = typeof mp.importedAt==="string" ? mp.importedAt : null;
@@ -1603,11 +1624,15 @@ renderers.home = function(root){
   var grid = h("div", {class:"card-grid"},
     card("ic-clock", "Feuille de vacation", "Saisir vos vacations et générer le relevé du mois (RITA)", "vacations"),
     card("ic-scale", "Présider un BJ", "Le fil rouge complet, étape par étape", "bj"),
-    card("ic-handshake", "Présider un BCO", "Rubrique en construction", "bco", h("span",{class:"badge amber"},"Brouillon"), false, true),
+    card("ic-handshake", "Présider un BCO", "Rubrique en construction", "bco", h("span",{class:"badge amber"},"Bientôt"), false, true),
     card("ic-book", "Textes de référence", "Articles cités, recherche rapide", "refs"),
     card("ic-quote", "Phrases rituelles", "Les formules fréquentes en audience", "phrases", null, true),
     (state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president") ? card("ic-users", "Administrer ma section", "Outils présidence de section", "admin-section", null, true) : null,
-    state.profile.presidentCph===true ? card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", null, true) : null,
+    state.profile.presidentCph===true ? (
+      isAppOwner()
+        ? card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", null, true)
+        : card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", h("span",{class:"badge amber"},"Bientôt disponible"), true, true)
+    ) : null,
     card("ic-globe", "Liens utiles", "Site web, annuaire, Formation ENM, Légifrance, ENSAP", "liens-utiles", null, true)
   );
   wrap.appendChild(grid);
@@ -1865,7 +1890,7 @@ function shiftMonthKey(key, delta){
 }
 function parseISODate(str){ var p=str.split("-"); return new Date(Number(p[0]), Number(p[1])-1, Number(p[2])); }
 var vacViewMonth = monthKey(todayISO());
-var planningViewType = "bj";
+var planningViewType = "all";
 var planningLastRealType = "bj";
 var planningViewMonth = monthKey(todayISO());
 
@@ -3876,6 +3901,11 @@ function openPlanningRoleImportConfirm(payload, expectedRole, withStubs){
     h("button", {class:"sheet-btn primary", onclick:function(){
       var stats = mergePlanningImport(payload);
       var stubsAdded = withStubs ? createOwnCollegeStubs(payload) : 0;
+      /* Import réellement confirmé (pas seulement le sélecteur de fichier
+         ouvert) : c'est ici, pour l'import côté président uniquement, que
+         le parcours guidé de « Outil de planification » avance vers
+         l'étape suivante (« Imprimer le planning global »). */
+      if(expectedRole==="vice-president") state.planningFlowStep = (state.planningFlowStep+1) % 5;
       saveState(); closeSheet(); render("planification");
       var msg = stats.membersAdded+" conseiller(s) ajouté(s), "+stats.membersUpdated+" mis à jour · "
         + stats.entriesAdded+" audience(s) ajoutée(s), "+stats.entriesUpdated+" mise(s) à jour.";
@@ -4458,16 +4488,10 @@ renderers["planification"] = function(root){
   root.appendChild(h("p", {class:"lede"}, "Programmez les BJ, BCO et BCO MEE de la section et répartissez présidences et assesseurs — les propositions se classent selon la charge déjà enregistrée de chaque conseiller."));
 
   var typeRow = h("div", {class:"btn-row", style:"margin-bottom:12px; flex-wrap:wrap; row-gap:8px;"});
-  PLANNING_TYPES.forEach(function(t){
-    typeRow.appendChild(h("button", {
-      class: "sheet-btn small "+(planningViewType===t.id ? "primary" : "ghost"),
-      onclick:function(){ planningViewType = t.id; planningLastRealType = t.id; render("planification"); }
-    }, t.label));
-  });
   typeRow.appendChild(h("button", {
     class: "sheet-btn small "+(planningViewType==="incomplete" ? "danger" : "ghost"),
-    onclick:function(){ planningViewType = "incomplete"; render("planification"); }
-  }, "Audiences incomplètes"));
+    onclick:function(){ planningViewType = planningViewType==="incomplete" ? "all" : "incomplete"; render("planification"); }
+  }, "Audiences incomplètes uniquement"));
   root.appendChild(typeRow);
 
   var nav = h("div", {class:"btn-row", style:"align-items:center;margin-bottom:14px"},
@@ -4486,7 +4510,7 @@ renderers["planification"] = function(root){
   var entries = state.planning
     .filter(function(p){
       if(monthKey(p.date)!==planningViewMonth) return false;
-      return planningViewType==="incomplete" ? planningEntryIncomplete(p) : p.type===planningViewType;
+      return planningViewType==="incomplete" ? planningEntryIncomplete(p) : true;
     })
     .sort(function(a,b){ return a.date<b.date ? -1 : 1; });
 
@@ -4500,7 +4524,7 @@ renderers["planification"] = function(root){
       p.assesseurs.forEach(function(a, i){
         roles.push((p.assesseurs.length>1 ? "Assesseur "+(i+1)+" : " : "Assesseur : ")+resolveMemberName(a));
       });
-      var sub = (planningViewType==="incomplete" ? planningTypeLabel(p.type)+" · " : "") + "Collège "+(p.college||"—").toLowerCase()+" · Présidence "+(p.presidence==="Salarié"?"salariée":p.presidence==="Employeur"?"employeur":"—");
+      var sub = planningTypeLabel(p.type)+" · Collège "+(p.college||"—").toLowerCase()+" · Présidence "+(p.presidence==="Salarié"?"salariée":p.presidence==="Employeur"?"employeur":"—");
       var incomplete = planningEntryIncomplete(p);
       panel.appendChild(h("div", {class:"row-click"+(incomplete ? " incomplete" : ""), onclick:function(){ openPlanningForm(p); }},
         h("div", {class:"rc-main"},
@@ -4528,8 +4552,7 @@ renderers["planification"] = function(root){
 
   root.appendChild(h("div", {class:"footnote", style:"margin-top:16px"}, "Le classement des présidents et assesseurs proposés se base sur le nombre de dates déjà attribuées à chaque conseiller pour ce même type d’audience."));
 
-  root.appendChild(h("div", {class:"section-title"}, "Document du planning"));
-  root.appendChild(h("p", {class:"lede"}, "Générez une image imprimable (JPG, format A4 paysage) qui regroupe toutes les audiences — BJ, BCO et BCO MEE confondus — d’un collège, sur un mois ou une année entière, quel que soit l’onglet ou le mois affichés ci-dessus."));
+  root.appendChild(h("div", {class:"section-title"}, "Générer le planning"));
 
   var buttons = [];
   var complete = myCollegeComplete();
@@ -4542,21 +4565,44 @@ renderers["planification"] = function(root){
     }});
     root.appendChild(vicePresidentImportInput);
 
+    /* Parcours guidé : un seul de ces 5 boutons est affiché à la fois
+       (state.planningFlowStep), dans l’ordre ci-dessous. Chaque clic
+       exécute l’action puis fait avancer au bouton suivant ; après le
+       5e (« Partager avec la section »), la boucle revient au 1er. */
+    var pSteps = [
+      {
+        label:"Partager avec le vice-président", cls:"ghost",
+        disabled: !complete,
+        title: complete ? "" : "Complétez d’abord toutes les audiences de votre collège.",
+        onclick:function(){ sharePlanningWithCounterpart(); }
+      },
+      { label:"Importer la réponse du vice-président", cls:"ghost", onclick:function(){ vicePresidentImportInput.click(); } },
+      { label:"Imprimer le planning global", cls:"primary", onclick:function(){ openPlanningExportSheet(); } },
+      {
+        label:"Envoyer planning au Greffe", cls:"ghost",
+        disabled: !bothCollegesComplete(),
+        title: bothCollegesComplete() ? "" : "Toutes les audiences à venir (mois en cours et après) doivent être entièrement pourvues dans les deux collèges au préalable.",
+        onclick:function(){ sendPlanningToGreffe(); }
+      },
+      { label:"Partager avec la section", cls:"ghost", onclick:function(){ shareSectionBroadcast(); } }
+    ];
+    var pStep = state.planningFlowStep % pSteps.length;
+    var pCurrent = pSteps[pStep];
+    /* L'étape « Importer la réponse du vice-président » (index 1) ne fait
+       qu'ouvrir le sélecteur de fichier ici : l'import n'est confirmé que
+       dans openPlanningRoleImportConfirm (bouton « Confirmer l'import »),
+       c'est donc là — pas ici — que l'étape avance réellement. Pour les
+       4 autres boutons, l'action est immédiate au clic : on avance dès
+       qu'elle est déclenchée. */
     buttons.push({
-      label:"Partager avec le vice-président", cls:"ghost",
-      disabled: !complete,
-      title: complete ? "" : "Complétez d’abord toutes les audiences de votre collège.",
-      onclick:function(){ sharePlanningWithCounterpart(); }
+      label: pCurrent.label, cls: pCurrent.cls, disabled: pCurrent.disabled, title: pCurrent.title,
+      onclick: pStep===1 ? pCurrent.onclick : function(){
+        pCurrent.onclick();
+        state.planningFlowStep = (pStep+1) % pSteps.length;
+        saveState();
+        render("planification");
+      }
     });
-    buttons.push({label:"Importer la réponse du vice-président", cls:"ghost", onclick:function(){ vicePresidentImportInput.click(); }});
-    buttons.push({label:"Imprimer le planning global", cls:"primary", onclick:function(){ openPlanningExportSheet(); }});
-    buttons.push({
-      label:"Envoyer planning au Greffe", cls:"ghost",
-      disabled: !bothCollegesComplete(),
-      title: bothCollegesComplete() ? "" : "Toutes les audiences à venir (mois en cours et après) doivent être entièrement pourvues dans les deux collèges au préalable.",
-      onclick:function(){ sendPlanningToGreffe(); }
-    });
-    buttons.push({label:"Partager avec la section", cls:"ghost", onclick:function(){ shareSectionBroadcast(); }});
   } else if(role==="vice-president"){
     var presidentImportInput = h("input", {type:"file", accept:"application/json", style:"display:none", onchange:function(e){
       var file = e.target.files[0]; if(!file) return;
@@ -5205,6 +5251,13 @@ renderers["liens-utiles"] = function(root){
 };
 
 renderers["admin-cph"] = function(root){
+  if(!isAppOwner()){
+    root.appendChild(h("div", {class:"banner"},
+      h("span", null, h("b", null, "Bientôt disponible. "), "Cette rubrique est encore en cours de construction et n’est pas encore ouverte.")
+    ));
+    return;
+  }
+
   root.appendChild(h("div", {class:"banner blue"},
     h("span", null, h("b", null, "Module en construction. "), "Un espace pour coordonner l’ensemble du conseil — à construire ensemble.")
   ));
@@ -5265,6 +5318,13 @@ function updatePriseFonctionProgress(){
   if(label) label.textContent = done+" / "+items.length+" étapes réalisées";
 }
 renderers["prise-fonction"] = function(root){
+  if(!isAppOwner()){
+    root.appendChild(h("div", {class:"banner"},
+      h("span", null, h("b", null, "Bientôt disponible. "), "Cette rubrique est encore en cours de construction et n’est pas encore ouverte.")
+    ));
+    return;
+  }
+
   var gs = state.priseFonction;
   var items = pfVisibleItems();
 
@@ -5559,7 +5619,7 @@ renderers.settings = function(root){
   root.appendChild(h("div", {class:"section-title"}, "Fonctions au CPH"));
   var fnPanel = h("div", {class:"panel"});
   fnPanel.appendChild(choiceField("Fonction en section", p.sectionRole, SECTION_ROLE_CHOICES, function(v){ p.sectionRole=v; saveState(); render("settings"); }));
-  fnPanel.appendChild(h("div", {style:"margin-top:14px"}, boolField("Président(e) de CPH ?", p.presidentCph, function(v){ p.presidentCph=v; saveState(); render("settings"); })));
+  fnPanel.appendChild(h("div", {style:"margin-top:14px"}, boolField("(vice)Président(e) CPH ?", p.presidentCph, function(v){ p.presidentCph=v; saveState(); render("settings"); })));
   fnPanel.appendChild(h("div", {style:"margin-top:14px"}, boolField("Référiste ?", p.referiste, function(v){ p.referiste=v; saveState(); render("settings"); })));
   root.appendChild(fnPanel);
 
