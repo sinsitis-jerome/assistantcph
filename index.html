@@ -1906,6 +1906,10 @@ var vacViewMonth = monthKey(todayISO());
 var planningViewType = "all";
 var planningLastRealType = "bj";
 var planningViewMonth = monthKey(todayISO());
+/* Tri du tableau des conseillers dans « Acteurs de ma section » (côté
+   président uniquement) : "college" (regroupement par collège, comme
+   auparavant) ou "syndicat" (regroupement par organisation syndicale). */
+var memberSortMode = "college";
 
 function natureLabel(id){ var n=NATURES.filter(function(x){return x.id===id;})[0]; return n ? n.label : id; }
 function depLabel(v){ var o=DEP_OPTIONS.filter(function(x){return x.value===v;})[0]; return o ? o.label : ""; }
@@ -3221,28 +3225,17 @@ function memberAudienceStats(member){
   });
   return stats;
 }
-function openSectionMemberView(member){
+/* Sheet dédiée aux statistiques d'audiences d'un conseiller (BJ/BCO,
+   passés/à venir/totaux) — séparée de la fiche elle-même (voir
+   openSectionMemberView) et accessible via son bouton « Voir ses
+   stats », pour que la fiche reste courte et rapide à consulter. */
+function openMemberStatsSheet(member){
   var stats = memberAudienceStats(member);
   var bjTotal = stats.bjPast + stats.bjUpcoming;
   var bcoTotal = stats.bcoPast + stats.bcoUpcoming;
 
   var body = h("div", null);
-  var info = h("div", {class:"info-list"});
-  function infoRow(label, value, href){
-    info.appendChild(h("div", {class:"info-row"},
-      h("div", {class:"info-label"}, label),
-      value && href
-        ? h("a", {href:href, class:"info-value"}, value)
-        : h("div", {class:"info-value"}, value || "—")
-    ));
-  }
-  infoRow("Collège", member.college);
-  infoRow("Syndicat", member.syndicat);
-  infoRow("Email", member.email, member.email ? "mailto:"+member.email : null);
-  infoRow("Téléphone", member.tel, member.tel ? "tel:"+member.tel : null);
-  body.appendChild(info);
-
-  body.appendChild(h("div", {class:"section-title", style:"font-size:.92rem; margin-top:20px;"}, "Bureau de jugement (BJ)"));
+  body.appendChild(h("div", {class:"section-title", style:"font-size:.92rem; margin-top:0;"}, "Bureau de jugement (BJ)"));
   body.appendChild(h("div", {class:"stat-row"},
     h("div", {class:"stat-box"}, h("div", {class:"n"}, String(stats.bjPast)), h("div", {class:"l"}, "BJ passés")),
     h("div", {class:"stat-box"}, h("div", {class:"n"}, String(stats.bjUpcoming)), h("div", {class:"l"}, "BJ à venir")),
@@ -3257,6 +3250,30 @@ function openSectionMemberView(member){
   ));
 
   body.appendChild(h("div", {class:"footnote", style:"margin-top:14px"}, "Ces compteurs sont calculés automatiquement à partir des dates enregistrées dans l’Outil de planification."));
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:18px", onclick:function(){
+    closeSheet();
+    openSectionMemberView(member);
+  }}, "Retour à la fiche"));
+
+  openSheet("Statistiques — "+(memberDisplayName(member) || "conseiller"), body);
+}
+function openSectionMemberView(member){
+  var body = h("div", null);
+  var info = h("div", {class:"info-list"});
+  function infoRow(label, value, href){
+    info.appendChild(h("div", {class:"info-row"},
+      h("div", {class:"info-label"}, label),
+      value && href
+        ? h("a", {href:href, class:"info-value"}, value)
+        : h("div", {class:"info-value"}, value || "—")
+    ));
+  }
+  infoRow("Section", state.profile.section);
+  infoRow("Collège", member.college);
+  infoRow("Syndicat", member.syndicat);
+  infoRow("Email", member.email, member.email ? "mailto:"+member.email : null);
+  infoRow("Téléphone", member.tel, member.tel ? "tel:"+member.tel : null);
+  body.appendChild(info);
 
   var actions = h("div", {style:"margin-top:18px"});
   actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
@@ -3266,7 +3283,11 @@ function openSectionMemberView(member){
   actions.appendChild(h("button", {class:"sheet-btn accent", onclick:function(){
     closeSheet();
     openMemberPlanningExportSheet(member);
-  }}, "Éditer son planning"));
+  }}, "Télécharger le planning"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){
+    closeSheet();
+    openMemberStatsSheet(member);
+  }}, "Voir ses stats"));
   actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
     var name = memberDisplayName(member) || "ce conseiller";
     openSheet("Supprimer cette fiche", h("div", null,
@@ -3309,6 +3330,20 @@ renderers["section-membres"] = function(root){
 
   root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Conseillers de la section"));
 
+  if(state.profile.sectionRole==="president"){
+    renderPresidentMembersTable(root, members);
+  } else {
+    renderBasicMembersList(root, members);
+  }
+
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:16px"}, "Ce répertoire est enregistré uniquement sur cet appareil, comme le reste de vos données."));
+};
+
+/* Répertoire des conseillers tel qu'affiché au vice-président (inchangé
+   par rapport à avant) : simple regroupement par collège, sans compteurs
+   ni tri — la vue enrichie ci-dessous (renderPresidentMembersTable) est
+   réservée au président de section. */
+function renderBasicMembersList(root, members){
   if(members.length===0){
     root.appendChild(h("div", {class:"init-empty"},
       h("p", null, "Aucun conseiller enregistré pour l’instant.")
@@ -3345,9 +3380,92 @@ renderers["section-membres"] = function(root){
 
   root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){ openSectionMemberForm(null); }},
     "+ Ajouter un conseiller"));
+}
 
-  root.appendChild(h("div", {class:"footnote", style:"margin-top:16px"}, "Ce répertoire est enregistré uniquement sur cet appareil, comme le reste de vos données."));
-};
+/* Répertoire enrichi réservé au président de section : compteurs par
+   collège, tableau trié au choix par collège ou par syndicat, puis
+   bouton de création — voir la demande du président du 30/08/2026. */
+function renderPresidentMembersTable(root, members){
+  var nSalarie = members.filter(function(m){ return m.college==="Salarié"; }).length;
+  var nEmployeur = members.filter(function(m){ return m.college==="Employeur"; }).length;
+
+  root.appendChild(h("div", {class:"stat-row"},
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(nSalarie)), h("div", {class:"l"}, "Salariés")),
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(nEmployeur)), h("div", {class:"l"}, "Employeurs")),
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(members.length)), h("div", {class:"l"}, "Au total"))
+  ));
+
+  if(members.length===0){
+    root.appendChild(h("div", {class:"init-empty", style:"margin-top:14px"},
+      h("p", null, "Aucun conseiller enregistré pour l’instant.")
+    ));
+  } else {
+    var sortRow = h("div", {class:"btn-row", style:"margin-top:14px; margin-bottom:4px;"});
+    [["college","Trier par collège"],["syndicat","Trier par syndicat"]].forEach(function(pair){
+      sortRow.appendChild(h("button", {
+        class:"sheet-btn small "+(memberSortMode===pair[0] ? "primary" : "ghost"),
+        onclick:function(){ memberSortMode=pair[0]; render("section-membres"); }
+      }, pair[1]));
+    });
+    root.appendChild(sortRow);
+
+    root.appendChild(h("p", {class:"lede"}, members.length+(members.length>1 ? " conseillers enregistrés. " : " conseiller enregistré. ")+"Touchez une fiche pour la consulter."));
+
+    var groups; // liste ordonnée de {label, items}
+    if(memberSortMode==="syndicat"){
+      var bySyndicat = {};
+      members.forEach(function(m){
+        var key = (m.syndicat||"").trim();
+        (bySyndicat[key] || (bySyndicat[key]=[])).push(m);
+      });
+      var syndicatKeys = Object.keys(bySyndicat).filter(function(k){ return k!==""; }).sort(function(a,b){
+        return a.localeCompare(b, "fr-FR");
+      });
+      if(bySyndicat[""]) syndicatKeys.push(""); // Syndicat non précisé, en dernier.
+      groups = syndicatKeys.map(function(k){
+        return { label: k || "Syndicat non précisé", items: bySyndicat[k].slice().sort(memberSortCompare) };
+      });
+    } else {
+      var groupOrder = COLLEGES.slice();
+      if(state.profile.college && groupOrder.indexOf(state.profile.college) > 0){
+        groupOrder = [state.profile.college].concat(groupOrder.filter(function(c){ return c!==state.profile.college; }));
+      }
+      groupOrder.push(""); // Collège non précisé, toujours affiché en dernier.
+      groups = groupOrder.map(function(collegeValue){
+        return {
+          label: collegeValue ? "Collège "+collegeValue.toLowerCase() : "Collège non précisé",
+          items: members.filter(function(m){ return (m.college||"")===collegeValue; }).sort(memberSortCompare)
+        };
+      });
+    }
+
+    groups.forEach(function(group){
+      if(group.items.length===0) return;
+      root.appendChild(h("div", {class:"section-title"}, group.label));
+      var panel = h("div", {class:"panel"});
+      group.items.forEach(function(m){
+        var subParts = [];
+        if(memberSortMode==="syndicat"){
+          if(m.college) subParts.push(m.college);
+        } else {
+          if(m.syndicat) subParts.push(m.syndicat);
+        }
+        if(m.email) subParts.push(m.email);
+        panel.appendChild(h("div", {class:"row-click", onclick:function(){ openSectionMemberView(m); }},
+          h("div", {class:"rc-main"},
+            h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
+            h("div", {class:"rc-sub"}, subParts.length ? subParts.join(" · ") : "—")
+          ),
+          h("div", {class:"rc-val"}, m.tel || "")
+        ));
+      });
+      root.appendChild(panel);
+    });
+  }
+
+  root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){ openSectionMemberForm(null); }},
+    "+ Créer un conseiller"));
+}
 
 /* =================================================================
    ÉCRAN — OUTIL DE PLANIFICATION
