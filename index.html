@@ -1704,11 +1704,26 @@ function statsPeriodEmptyLabel(period){
    ================================================================= */
 function currentYearStr(){ return todayISO().slice(0,4); }
 
+/* Une même personne peut se retrouver représentée de deux façons dans une
+   audience : via l'option dédiée « Moi-même » (id "__self__"), ou via sa
+   propre fiche dans « Acteurs de ma section » si le président ou le
+   vice-président figure aussi dans l'annuaire des conseillers (cas
+   fréquent, par ex. après un import qui inclut son propre nom) — les deux
+   représentations doivent compter comme « soi-même » pour Mes statistiques,
+   sans quoi des audiences bien enregistrées n'y apparaissent jamais. */
+function isSelfMemberId(id){
+  if(id==="__self__") return true;
+  if(!id) return false;
+  var m = state.sectionMembers.filter(function(x){ return x.id===id; })[0];
+  if(!m) return false;
+  return normName(m.nom)===normName(state.profile.nom) && normName(m.prenom)===normName(state.profile.prenom);
+}
+
 function myInvolvedPlanningEntries(){
   var out = [];
   (state.planning||[]).forEach(function(p){
-    var isPresident = p.president==="__self__";
-    var isAssesseur = (p.assesseurs||[]).indexOf("__self__")!==-1;
+    var isPresident = isSelfMemberId(p.president);
+    var isAssesseur = (p.assesseurs||[]).some(isSelfMemberId);
     if(isPresident || isAssesseur){
       out.push({ type:p.type, date:p.date, role: isPresident ? "president" : "assesseur" });
     }
