@@ -4839,33 +4839,40 @@ renderers["planification"] = function(root){
   }, "Audiences incomplètes uniquement"));
   root.appendChild(typeRow);
 
-  var nav = h("div", {class:"btn-row", style:"align-items:center;margin-bottom:14px"},
-    h("button", {class:"sheet-btn ghost small", onclick:function(){
-      planningViewMonth = shiftMonthKey(planningViewMonth, -1);
-      render("planification");
-    }}, "←"),
-    h("div", {
-      class:"month-nav-label",
-      style:"flex:1;text-align:center;font-weight:600;font-size:.88rem;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;",
-      onclick:openPlanningMonthPicker
-    }, icon("ic-calendar"), monthLabel(planningViewMonth)),
-    h("button", {class:"sheet-btn ghost small", onclick:function(){
-      planningViewMonth = shiftMonthKey(planningViewMonth, 1);
-      render("planification");
-    }}, "→")
-  );
-  root.appendChild(nav);
+  /* Le sélecteur de mois n'a de sens que pour la vue "toutes les
+     audiences" : dès qu'on filtre sur les seules audiences incomplètes,
+     on veut au contraire la liste intégrale — tous mois confondus — pour
+     ne rien manquer, donc le mois n'est plus un filtre pertinent et le
+     sélecteur disparaît. */
+  if(planningViewType!=="incomplete"){
+    var nav = h("div", {class:"btn-row", style:"align-items:center;margin-bottom:14px"},
+      h("button", {class:"sheet-btn ghost small", onclick:function(){
+        planningViewMonth = shiftMonthKey(planningViewMonth, -1);
+        render("planification");
+      }}, "←"),
+      h("div", {
+        class:"month-nav-label",
+        style:"flex:1;text-align:center;font-weight:600;font-size:.88rem;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;",
+        onclick:openPlanningMonthPicker
+      }, icon("ic-calendar"), monthLabel(planningViewMonth)),
+      h("button", {class:"sheet-btn ghost small", onclick:function(){
+        planningViewMonth = shiftMonthKey(planningViewMonth, 1);
+        render("planification");
+      }}, "→")
+    );
+    root.appendChild(nav);
+  }
 
   var entries = state.planning
     .filter(function(p){
-      if(monthKey(p.date)!==planningViewMonth) return false;
-      return planningViewType==="incomplete" ? planningEntryIncomplete(p) : true;
+      if(planningViewType==="incomplete") return planningEntryIncomplete(p);
+      return monthKey(p.date)===planningViewMonth;
     })
     .sort(function(a,b){ return a.date<b.date ? -1 : 1; });
 
   var panel = h("div", {class:"panel"});
   if(entries.length===0){
-    panel.appendChild(h("p", {class:"lede", style:"margin:0"}, planningViewType==="incomplete" ? "Aucune audience incomplète pour ce mois." : "Aucune date enregistrée pour ce mois."));
+    panel.appendChild(h("p", {class:"lede", style:"margin:0"}, planningViewType==="incomplete" ? "Aucune audience incomplète." : "Aucune date enregistrée pour ce mois."));
   } else {
     entries.forEach(function(p){
       var roles = [];
