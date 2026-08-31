@@ -6225,7 +6225,7 @@ function sharePlanningWithCounterpart(){
 }
 function savePlanningShareThenMailto(to, subject, json, filename, role){
   var body = "Bonjour,\n\nVeuillez trouver ci-joint le planning complet de mon collège, à importer dans votre outil de planification"
-    + (role==="president" ? " (bouton « Importer du président »)." : " (bouton « Importer la réponse du vice-président »).")
+    + (role==="president" ? " (bouton « NE PAS CLIQUER - TESTS EN COURS »)." : " (bouton « NE PAS CLIQUER - TESTS EN COURS »).")
     + "\n\n(pensez à joindre manuellement le fichier téléchargé à cet email avant l’envoi)\n\nCordialement.";
   function openMailto(){
     var link = "mailto:"+to+"?subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
