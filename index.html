@@ -184,6 +184,8 @@
     transition: transform .15s ease;
   }
   .quick-link:active{ transform:scale(0.96); }
+  .quick-link.disabled{ cursor:not-allowed; opacity:.55; }
+  .quick-link.disabled:active{ transform:none; }
   .quick-link .ic{
     width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center;
     background:var(--accent-glow); color:var(--accent-2); flex:none;
@@ -998,10 +1000,13 @@ function isAppOwner(){
   var p = state.profile;
   return normName(p.prenom)==="jerome" && normName(p.nom)==="piquer";
 }
-/* Tous les champs des Réglages jusqu'à « Fonctions au CPH » inclus sont
-   obligatoires pour activer l'application, à l'exception d'« Êtes-vous
-   posté(e) ? » et des horaires de travail habituels (tous deux
-   volontairement facultatifs — voir le panneau « Activité salariée »). */
+/* Tous ces champs sont obligatoires pour activer l'application (recopiés
+   automatiquement depuis la fiche choisie dans l'annuaire et la section
+   rejointe par code — voir openPickMyMemberSheet/openJoinSectionSyncSheet
+   — plutôt que saisis à la main dans Réglages, qui n'affiche plus que
+   leur valeur en lecture seule), à l'exception d'« Êtes-vous posté(e) ? »
+   et des horaires de travail habituels (tous deux volontairement
+   facultatifs — voir le panneau « Activité salariée »). */
 function isProfileComplete(p){
   if(!p.prenom.trim() || !p.nom.trim() || !p.tel.trim() || !p.college || !p.section || !p.cph) return false;
   if(p.cph===CPH_AUTRE && !p.cphAutre.trim()) return false;
@@ -1090,13 +1095,23 @@ var DEFAULT_STATE = {
   bco:{ checked:[], startedAt:null },
   priseFonction:{ checked:[], startedAt:null },
   /* Synchronisation chiffrée entre les acteurs d'une même section (voir
-     module SYNC-CRYPTO plus bas) : sectionCode est le jeton partagé (une
-     fois entré, l'app récupère/pousse automatiquement l'annuaire des
-     conseillers et le planning, chiffrés, vers/depuis Firestore) ;
-     lastSyncAt trace la dernière synchronisation réussie, purement
-     informatif. Vide = synchronisation non activée, l'app reste 100%
-     locale comme avant (import/export JSON manuel toujours disponible). */
-  sync:{ sectionCode:"", lastSyncAt:null },
+     module SYNC-CRYPTO plus bas) : sectionCode est le jeton partagé.
+     lastSyncAt trace la dernière synchronisation réussie (envoi ou
+     réception), purement informatif. Vide = synchronisation non activée,
+     l'app reste 100% locale comme avant (import/export JSON manuel
+     toujours disponible).
+     lastSyncedSnapshot (voir markSyncDone) est un instantané JSON de
+     l'annuaire+planning TEL QU'ILS ÉTAIENT au moment de cette dernière
+     synchronisation — il permet à maybeAutoPullSection (plus bas) de
+     savoir si l'appareil a, depuis, des modifications locales pas encore
+     envoyées (l'instantané ne correspond alors plus à l'état actuel) : dans
+     ce cas SEULEMENT, le chargement automatique au lancement s'abstient
+     et retombe sur une simple notification, exactement comme avant,
+     plutôt que de risquer d'écraser une saisie locale. null = jamais
+     synchronisé sur cet appareil (ou sauvegarde antérieure à ce champ) :
+     traité comme "peut-être local et non envoyé", donc prudent par
+     défaut, jusqu'à la prochaine synchronisation réussie. */
+  sync:{ sectionCode:"", lastSyncAt:null, lastSyncedSnapshot:null },
   /* Codes personnels (4 chiffres) en clair pour les fiches créées ou
      régénérées SUR CET APPAREIL — voir le module CODE PERSONNEL PAR
      CONSEILLER : jamais synchronisé (syncPayloadFromState ne transmet que
@@ -1300,6 +1315,7 @@ function migrate(parsed){
     if(parsed.sync && typeof parsed.sync==="object"){
       s.sync.sectionCode = typeof parsed.sync.sectionCode==="string" ? parsed.sync.sectionCode : "";
       s.sync.lastSyncAt = typeof parsed.sync.lastSyncAt==="string" ? parsed.sync.lastSyncAt : null;
+      s.sync.lastSyncedSnapshot = typeof parsed.sync.lastSyncedSnapshot==="string" ? parsed.sync.lastSyncedSnapshot : null;
     }
     if(parsed.localMemberPins && typeof parsed.localMemberPins==="object"){
       Object.keys(parsed.localMemberPins).forEach(function(k){
@@ -1479,24 +1495,53 @@ function pushSectionSync(sectionCode, cph, sectionName){
   return pushSectionSyncPayload(sectionCode, cph, sectionName, syncPayloadFromState());
 }
 
+/* Appelée après CHAQUE synchronisation réussie, envoi comme réception
+   (voir tous les appels ci-dessous et dans le module ADMINISTRATION
+   GÉNÉRALE) : capture au passage un instantané de l'annuaire+planning
+   TELS QU'ILS VIENNENT d'être synchronisés (lastSyncedSnapshot) — c'est
+   ce qui permet à maybeAutoPullSection, plus bas, de distinguer un
+   appareil "propre" (rien de local à perdre) d'un appareil avec des
+   modifications non envoyées. */
 function markSyncDone(){
   state.sync.lastSyncAt = new Date().toISOString();
+  state.sync.lastSyncedSnapshot = JSON.stringify(syncPayloadFromState());
   saveState();
 }
 
-/* IMPORTANT — pourquoi il n'y a pas de récupération automatique et
-   silencieuse au lancement : si l'appareil a des modifications locales
-   pas encore envoyées (par ex. une audience ajoutée hors ligne), un pull
-   automatique qui écraserait l'état local les ferait disparaître sans
-   prévenir. On se contente donc, au lancement, d'une simple VÉRIFICATION
-   (métadonnées seulement, aucune donnée rapatriée ni écrasée) : si une
-   version plus récente existe côté serveur, on prévient discrètement —
-   la récupération elle-même reste un geste explicite (Réglages >
-   Synchronisation > « Récupérer la dernière version »), tout comme
-   l'envoi (« Envoyer ma version actuelle »). C'est le prix à payer pour
-   ne jamais risquer de perdre une saisie locale sans le vouloir. */
-window.addEventListener("fb-sync-ready", function(){
-  if(!state.sync.sectionCode) return;
+/* Chargement automatique et silencieux du planning de section à
+   l'arrivée sur l'application (voir échange avec l'utilisateur : « il
+   doit y avoir un chargement des données depuis firebase... pour qu'il
+   puisse afficher son dernier planning s'il le souhaite »).
+
+   Pendant longtemps, ce point d'entrée se contentait d'une simple
+   VÉRIFICATION de métadonnées (aucune donnée rapatriée), par crainte
+   qu'un pull automatique n'écrase silencieusement une modification
+   locale pas encore envoyée (par ex. une audience ajoutée hors ligne par
+   la présidence). Plutôt que d'abandonner cette garantie, le chargement
+   automatique ci-dessous ne s'applique QUE quand on peut prouver qu'il
+   n'y a rien à perdre : state.sync.lastSyncedSnapshot (voir markSyncDone)
+   est un instantané de l'annuaire+planning tel qu'ils étaient lors de la
+   dernière synchronisation réussie — si l'état local actuel lui est
+   encore rigoureusement identique, aucune modification locale n'a eu
+   lieu depuis, et récupérer + appliquer la dernière version distante ne
+   risque donc rien. Dans le cas contraire (ou si on ne peut pas encore le
+   prouver : lastSyncedSnapshot vaut null, par exemple juste après une
+   mise à jour de l'application qui introduit ce champ), on retombe
+   exactement sur l'ancien comportement : une simple notification,
+   jamais un écrasement silencieux — un vrai merge champ-par-champ des
+   modifications concurrentes serait plus ambitieux mais bien plus risqué
+   à construire correctement pour un gain incertain.
+
+   Ne se déclenche qu'une fois par session (autoPullAttempted), pour ne
+   jamais multiplier les allers-retours Firestore à chaque écran affiché
+   — appelé à la fois sur l'événement fb-sync-ready (cas normal :
+   ouverture de l'application, déjà synchronisée) et juste après
+   completeOnboarding (cas d'un tout premier lancement, où
+   sync.sectionCode ne devient vrai qu'au terme du parcours d'accueil,
+   potentiellement après que fb-sync-ready ait déjà été ignoré une
+   première fois faute de code de section à ce moment-là). */
+var autoPullAttempted = false;
+function checkRemoteFreshnessOnly(){
   window.__fbFirestore.getSectionMeta(state.sync.sectionCode).then(function(meta){
     if(!meta || !meta.updatedAt) return;
     var remoteTime = new Date(meta.updatedAt).getTime();
@@ -1507,7 +1552,100 @@ window.addEventListener("fb-sync-ready", function(){
   }).catch(function(err){
     if(window.console && console.warn) console.warn("Vérification de synchronisation impossible :", err);
   });
-});
+}
+/* Instantané des SEULES audiences où l'utilisateur apparaît (président ou
+   assesseur), avec leur id réel — contrairement à state.myPlanning (fusionné
+   par nom, sans id), on garde ici de quoi comparer proprement un « avant »
+   et un « après » du même appareil (voir notifyMyPlanningChanges). */
+function myInvolvedPlanningSnapshot(planningList){
+  return (planningList||[]).filter(function(p){
+    return isSelfMemberId(p.president) || (p.assesseurs||[]).some(isSelfMemberId);
+  }).map(function(p){
+    return { id:p.id, type:p.type, date:p.date, role: isSelfMemberId(p.president) ? "president" : "assesseur" };
+  });
+}
+
+/* Notification (au sens large : demande de l'utilisateur — voir échange —
+   « une notification à l'ouverture de l'appli » ; pas une vraie notification
+   système, voir la discussion sur les notifications push, mise de côté pour
+   l'instant faute de pouvoir s'en passer d'un serveur) des audiences
+   AJOUTÉES, SUPPRIMÉES ou MODIFIÉES (date/type/rôle) qui concernent
+   personnellement l'utilisateur, entre l'état laissé par la session
+   précédente (before, capturé juste avant d'appliquer le pull silencieux
+   dans maybeAutoPullSection) et l'état qui vient d'être récupéré (after).
+   Comparaison par id (stable d'un appareil à l'autre via Firestore),
+   jamais par date+type seuls (une date modifiée doit se voir comme une
+   modification, pas comme une suppression + un ajout sans lien). Reste
+   silencieuse si rien ne concerne l'utilisateur, même si d'autres audiences
+   de la section ont changé par ailleurs. */
+function notifyMyPlanningChanges(before, after){
+  var beforeById = {}; before.forEach(function(e){ beforeById[e.id] = e; });
+  var afterById = {}; after.forEach(function(e){ afterById[e.id] = e; });
+  var added = after.filter(function(e){ return !beforeById[e.id]; });
+  var removed = before.filter(function(e){ return !afterById[e.id]; });
+  var modified = after.filter(function(e){
+    var b = beforeById[e.id];
+    return b && (b.date!==e.date || b.type!==e.type || b.role!==e.role);
+  });
+  if(!added.length && !removed.length && !modified.length) return;
+
+  function itemLabel(e){ return planningTypeLabel(e.type)+" du "+planningDateLabel(e.date); }
+  function group(title, items, prefix){
+    if(!items.length) return null;
+    var box = h("div", {style:"margin-bottom:12px"});
+    box.appendChild(h("div", {class:"section-title", style:"font-size:.92rem; margin-top:0;"}, title));
+    items.forEach(function(e){ box.appendChild(h("p", {class:"lede", style:"margin:4px 0"}, prefix(e))); });
+    return box;
+  }
+
+  var body = h("div", null);
+  var addedBox = group(added.length>1 ? "Audiences ajoutées" : "Audience ajoutée", added, function(e){ return "+ "+itemLabel(e); });
+  var removedBox = group(removed.length>1 ? "Audiences supprimées" : "Audience supprimée", removed, function(e){ return "– "+itemLabel(e); });
+  var modifiedBox = group(modified.length>1 ? "Audiences modifiées" : "Audience modifiée", modified, function(e){ return itemLabel(beforeById[e.id])+" → "+itemLabel(e); });
+  [addedBox, removedBox, modifiedBox].forEach(function(box){ if(box) body.appendChild(box); });
+  body.appendChild(h("button", {class:"sheet-btn primary", style:"margin-top:6px", onclick:function(){ closeSheet(); go("mon-planning"); }}, "Voir mon planning"));
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
+
+  /* Une fenêtre qui s'ouvre toute seule dès l'arrivée sur l'accueil reste
+     acceptable ; l'imposer alors que l'utilisateur est déjà engagé ailleurs
+     dans l'application (un formulaire en cours, par exemple) serait
+     intrusif — un simple toast suffit dans ce cas, moins précis mais non
+     bloquant. */
+  if(navStack[navStack.length-1]==="home"){
+    openSheet("Votre planning a changé", body);
+  } else {
+    var parts = [];
+    if(added.length) parts.push(added.length+" ajoutée"+(added.length>1?"s":""));
+    if(removed.length) parts.push(removed.length+" supprimée"+(removed.length>1?"s":""));
+    if(modified.length) parts.push(modified.length+" modifiée"+(modified.length>1?"s":""));
+    toast("Votre planning a changé : "+parts.join(", ")+".");
+  }
+}
+
+function maybeAutoPullSection(){
+  if(autoPullAttempted) return;
+  if(!state.sync.sectionCode || !syncAvailable()) return;
+  autoPullAttempted = true;
+  var localSnapshot = JSON.stringify(syncPayloadFromState());
+  var isDirty = state.sync.lastSyncedSnapshot===null || state.sync.lastSyncedSnapshot!==localSnapshot;
+  if(isDirty){ checkRemoteFreshnessOnly(); return; }
+  pullSectionSync(state.sync.sectionCode).then(function(result){
+    if(!result) return;
+    var remoteSnapshot = JSON.stringify(result.payload);
+    if(remoteSnapshot===localSnapshot) return; // déjà à jour, rien à faire
+    var myBefore = myInvolvedPlanningSnapshot(state.planning);
+    applySyncPayloadToState(result.payload);
+    markSyncDone();
+    notifyMyPlanningChanges(myBefore, myInvolvedPlanningSnapshot(state.planning));
+    var current = navStack[navStack.length-1];
+    if(["home","planification","mon-planning","section-membres"].indexOf(current)!==-1){
+      render(current);
+    }
+  }).catch(function(err){
+    if(window.console && console.warn) console.warn("Chargement automatique du planning impossible :", err);
+  });
+}
+window.addEventListener("fb-sync-ready", maybeAutoPullSection);
 
 /* =================================================================
    ADMINISTRATION GÉNÉRALE (rôle "Administrateur")
@@ -2016,6 +2154,175 @@ function openAdminMemberForm(existing){
   openSheet(isEdit ? "Modifier le conseiller" : "Nouveau conseiller", form);
 }
 
+/* Pendant administrateur de openPlanningForm (module OUTIL DE PLANIFICATION,
+   plus bas dans ce fichier) : opère sur adminBuffer.planning et
+   adminBuffer.sectionMembers (une section distante encore non envoyée —
+   voir pushAdminBuffer) plutôt que sur state.planning/state.sectionMembers,
+   via les versions génériques rankedCandidatesIn/candidateOptionLabel (voir
+   échange avec l'utilisateur : « vérifier que l'admin peut bien gérer le
+   planning à la main » — jusqu'ici l'espace administrateur ne permettait
+   que de consulter et supprimer une date, jamais d'en créer ou d'en
+   modifier le détail). Deux différences avec le parcours local : (1)
+   l'administrateur n'a pas de collège personnel, donc le collège d'une
+   NOUVELLE date est un choix explicite plutôt que déduit de
+   state.profile.college ; (2) aucun menu ne propose jamais « Moi-même » —
+   l'administrateur n'est jamais lui-même un des rôles d'une audience. */
+/* prefill (facultatif) : {date, presidence, college} — même principe que
+   celui d'openPlanningForm : ne s'applique qu'à la création d'une toute
+   nouvelle entrée, pour reprendre la date/présidence/collège d'une
+   audience déjà connue (voir openAudienceDetail, qui ouvre ce formulaire
+   pour compléter le collège choisi sur une audience déjà visible mais pas
+   encore renseignée de ce côté). */
+function openAdminPlanningForm(existing, defaultType, prefill){
+  var isEdit = !!existing;
+  var defaultCollege = COLLEGES[0] || "";
+  var draft = existing ? Object.assign({}, existing, {assesseurs: existing.assesseurs.slice()}) : Object.assign({
+    id:uid(), type: defaultType || "bj", date:"", college: defaultCollege, presidence: defaultCollege,
+    president:null, assesseurs:[]
+  }, prefill || {});
+
+  var form = h("div", null);
+
+  form.appendChild(h("label", {class:"field-label"}, "Type"));
+  var typeSel = h("select", null, PLANNING_TYPES.map(function(t){
+    return h("option", {value:t.id, selected: t.id===draft.type ? "selected" : null}, t.label);
+  }));
+  form.appendChild(typeSel);
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Date"));
+  var dateInput = h("input", {type:"date", value:draft.date});
+  form.appendChild(dateInput);
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Collège"));
+  var collegeSel = h("select", null, COLLEGES.map(function(c){
+    return h("option", {value:c, selected: c===draft.college ? "selected" : null}, c);
+  }));
+  form.appendChild(collegeSel);
+  form.appendChild(h("div", {class:"footnote"}, "Les rôles ci-dessous se choisissent parmi les conseillers de ce collège, quelle que soit la présidence de la date."));
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Statut"));
+  var presidenceSel = h("select", null, COLLEGES.map(function(c){
+    return h("option", {value:c, selected: c===draft.presidence ? "selected" : null}, "Présidence "+(c==="Salarié"?"salariée":"employeur"));
+  }));
+  form.appendChild(presidenceSel);
+
+  var rolesBox = h("div", {style:"margin-top:14px"});
+  form.appendChild(rolesBox);
+
+  var presidentSel = null, assesseurSels = [];
+
+  function roleSelect(candidates, typeId){
+    var opts = [ h("option", {value:"", selected:"selected"}, "— Choisir —") ];
+    candidates.forEach(function(c){
+      opts.push(h("option", {value:c.id}, candidateOptionLabel(c, typeId)));
+    });
+    return h("select", null, opts);
+  }
+
+  function updateRoles(){
+    clear(rolesBox);
+    presidentSel = null; assesseurSels = [];
+    var type = typeSel.value;
+    var college = collegeSel.value;
+    var presides = college === presidenceSel.value;
+    var candidates = rankedCandidatesIn(adminBuffer.sectionMembers, adminBuffer.planning, college, type);
+
+    if(candidates.length===0){
+      rolesBox.appendChild(h("div", {class:"footnote"}, "Aucun conseiller enregistré dans ce collège — ajoutez-le d’abord dans l’annuaire ci-dessus."));
+    }
+
+    if(type==="bj"){
+      if(presides){
+        rolesBox.appendChild(h("label", {class:"field-label"}, "Président"));
+        presidentSel = roleSelect(candidates, type);
+        rolesBox.appendChild(presidentSel);
+        rolesBox.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Assesseur"));
+        var a1 = roleSelect(candidates, type);
+        rolesBox.appendChild(a1);
+        assesseurSels = [a1];
+      } else {
+        rolesBox.appendChild(h("label", {class:"field-label"}, "1er assesseur"));
+        var b1 = roleSelect(candidates, type);
+        rolesBox.appendChild(b1);
+        rolesBox.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "2e assesseur"));
+        var b2 = roleSelect(candidates, type);
+        rolesBox.appendChild(b2);
+        assesseurSels = [b1, b2];
+      }
+    } else {
+      if(presides){
+        rolesBox.appendChild(h("label", {class:"field-label"}, "Président"));
+        presidentSel = roleSelect(candidates, type);
+        rolesBox.appendChild(presidentSel);
+      } else {
+        rolesBox.appendChild(h("label", {class:"field-label"}, "Assesseur"));
+        var c1 = roleSelect(candidates, type);
+        rolesBox.appendChild(c1);
+        assesseurSels = [c1];
+      }
+    }
+
+    if(presidentSel){
+      if(draft.president && candidates.some(function(c){ return c.id===draft.president; })){
+        presidentSel.value = draft.president;
+      }
+    }
+    assesseurSels.forEach(function(sel, i){
+      var val = draft.assesseurs[i];
+      if(val && candidates.some(function(c){ return c.id===val; })){
+        sel.value = val;
+      }
+    });
+  }
+  typeSel.addEventListener("change", updateRoles);
+  collegeSel.addEventListener("change", updateRoles);
+  presidenceSel.addEventListener("change", updateRoles);
+  updateRoles();
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    if(!dateInput.value){ toast("Choisissez une date."); return; }
+
+    var picked = [];
+    if(presidentSel && presidentSel.value) picked.push(presidentSel.value);
+    assesseurSels.forEach(function(sel){ if(sel.value) picked.push(sel.value); });
+    var dupes = picked.filter(function(v, i){ return picked.indexOf(v)!==i; });
+    if(dupes.length){ toast("Une même personne ne peut pas occuper deux rôles pour cette date."); return; }
+
+    var entry = {
+      id: draft.id,
+      type: typeSel.value,
+      date: dateInput.value,
+      college: collegeSel.value,
+      presidence: presidenceSel.value,
+      president: presidentSel && presidentSel.value ? presidentSel.value : null,
+      assesseurs: assesseurSels.map(function(sel){ return sel.value; }).filter(Boolean),
+      importSourceId: draft.importSourceId || null
+    };
+
+    if(isEdit){
+      adminBuffer.planning = adminBuffer.planning.map(function(p){ return p.id===entry.id ? entry : p; });
+    } else {
+      adminBuffer.planning.push(entry);
+    }
+    closeSheet();
+    render("sysadmin-section");
+    toast((isEdit ? "Date modifiée" : "Date ajoutée")+" — pensez à « Enregistrer et synchroniser ».");
+  }}, isEdit ? "Enregistrer les modifications" : "Ajouter la date"));
+  if(isEdit){
+    actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
+      adminBuffer.planning = adminBuffer.planning.filter(function(p){ return p.id!==draft.id; });
+      closeSheet();
+      render("sysadmin-section");
+      toast("Date supprimée — pensez à « Enregistrer et synchroniser ».");
+    }}, "Supprimer cette date"));
+  }
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
+  form.appendChild(actions);
+
+  openSheet(isEdit ? "Modifier la date" : "Nouvelle date", form);
+}
+
 /* --- Écrans (sheets) et actions déclenchés depuis Réglages > Synchronisation --- */
 
 function openCreateSectionSyncSheet(){
@@ -2066,6 +2373,35 @@ function openJoinSectionSyncSheet(onJoined, opts){
           return;
         }
         applySyncPayloadToState(result.payload);
+        /* Reprend aussi le CPH et la section transmis avec le document
+           distant, jusqu'ici silencieusement ignorés (result.cph/section
+           n'étaient utilisés nulle part) : sans ça, un(e) conseiller(e) qui
+           rejoint sur un appareil vierge garde un profil.cph/section vides
+           pour toujours, ce qui bloque ensuite isProfileComplete() malgré
+           un parcours d'accueil par ailleurs entièrement terminé — bug
+           identifié en construisant les étapes obligatoires activité
+           salariée + signature (voir échange avec l'utilisateur). Même
+           logique de repli que dans migrate() pour un CPH non listé. */
+        if(result.cph){
+          if(CPH_ALL.indexOf(result.cph)!==-1){ state.profile.cph = result.cph; state.profile.cphAutre = ""; }
+          else { state.profile.cph = CPH_AUTRE; state.profile.cphAutre = result.cph; }
+          /* Réglages > « Paramètres avancés » n'existe plus pour un(e)
+             utilisateur(rice) lambda (voir échange avec l'utilisateur) —
+             c'était jusqu'ici le seul endroit où ces liens/adresses se
+             remplissaient automatiquement en choisissant son CPH. Comme le
+             CPH est maintenant connu dès la jonction par code plutôt que
+             saisi à la main, on applique directement ici le même repli
+             connu pour ce CPH (ex. Béziers), sans jamais écraser une
+             valeur déjà présente. */
+          var preset = CPH_ADVANCED_PRESETS[state.profile.cph];
+          if(preset){
+            if(!state.profile.annuaireUrl) state.profile.annuaireUrl = preset.annuaireUrl;
+            if(!state.profile.cphWebUrl) state.profile.cphWebUrl = preset.cphWebUrl;
+            if(!state.profile.vacationsEmail) state.profile.vacationsEmail = preset.vacationsEmail;
+            if(!state.profile.presidentEmail) state.profile.presidentEmail = preset.presidentEmail;
+          }
+        }
+        if(result.section && SECTIONS.indexOf(result.section)!==-1){ state.profile.section = result.section; }
         state.sync.sectionCode = code;
         markSyncDone();
         closeSheet();
@@ -2087,7 +2423,10 @@ function openJoinSectionSyncSheet(onJoined, opts){
    même d'avoir pu la publier. Séparer les deux laisse à la présidence le
    choix explicite, dans le rare cas où les deux appareils auraient
    modifié les données depuis la dernière synchronisation. */
-function confirmAndPullSection(){
+/* returnScreen (facultatif, "settings" par défaut) : écran sur lequel
+   revenir une fois la récupération faite — voir renderers["mon-planning"],
+   qui réutilise ce même geste explicite plutôt que d'en dupliquer un. */
+function confirmAndPullSection(returnScreen){
   if(!syncAvailable()){ toast("Synchronisation indisponible pour le moment (vérifiez votre connexion)."); return; }
   openSheet("Récupérer la dernière version", h("div", null,
     h("p", {class:"lede"}, "L'annuaire des conseillers et le planning enregistrés sur cet appareil vont être remplacés par la dernière version partagée. Si des modifications locales n'ont pas encore été envoyées, elles seront perdues."),
@@ -2098,7 +2437,7 @@ function confirmAndPullSection(){
         applySyncPayloadToState(result.payload);
         markSyncDone();
         toast("Données récupérées.");
-        render("settings");
+        render(returnScreen || "settings");
       }).catch(function(err){
         toast("Échec de la récupération — vérifiez votre connexion.");
       });
@@ -2136,11 +2475,17 @@ function openPickMyMemberSheet(onDone){
     if(m.prenom) state.profile.prenom = m.prenom;
     if(m.nom) state.profile.nom = m.nom;
     if(m.college) state.profile.college = m.college;
+    /* Même logique de pré-remplissage que pour prénom/nom/collège
+       ci-dessus, étendue au téléphone : sans lui, un profil resterait
+       incomplet (voir isProfileComplete) au sortir même d'un parcours
+       d'accueil par ailleurs entièrement terminé — bug identifié en
+       construisant les étapes obligatoires activité salariée + signature
+       (voir échange avec l'utilisateur). */
+    if(m.tel) state.profile.tel = m.tel;
     /* La fonction en section (président/vice-président/aucune) se
        reconnaît désormais entièrement depuis l'étiquette posée sur cette
        fiche par l'administrateur — plus jamais déclarée soi-même (voir
-       module ADMINISTRATION GÉNÉRALE et Réglages > Fonctions au CPH).
-       "none" plutôt que null : le profil est ainsi considéré complet
+       module ADMINISTRATION GÉNÉRALE). "none" plutôt que null : le profil est ainsi considéré complet
        (voir isProfileComplete) dès qu'une fiche est choisie, sans exiger
        un passage superflu par Réglages. */
     state.profile.sectionRole = m.sectionRole || "none";
@@ -2548,8 +2893,15 @@ var SCREEN_TITLES = {
   "liens-utiles":"Liens utiles", "section-membres":"Acteurs de ma section",
   "planification":"Outil de planification", "mon-planning":"Mon planning",
   "prise-fonction":"Prise de fonction",
-  "sysadmin-panel":"Espace administrateur", "sysadmin-section":"Section administrée"
+  "sysadmin-panel":"Espace administrateur", "sysadmin-section":"Section administrée",
+  "onboarding-activite":"Bienvenue", "onboarding-signature":"Bienvenue"
 };
+/* Écrans du parcours d'accueil : ni bouton retour ni icône Réglages tant
+   qu'on y est (voir render() plus bas) — un conseiller ne doit pas
+   pouvoir contourner l'activité salariée ou la signature obligatoires en
+   sautant directement sur un autre écran (même logique déjà appliquée à
+   "onboarding" lui-même). */
+var ONBOARDING_SCREENS = ["onboarding", "onboarding-activite", "onboarding-signature"];
 var renderers = {};
 
 function go(screenId, replace){
@@ -2562,11 +2914,12 @@ function goBack(){
 }
 function render(screenId){
   document.getElementById("tb-title").textContent = SCREEN_TITLES[screenId] || "";
-  document.getElementById("btn-back").style.display = (screenId==="home"||screenId==="onboarding") ? "none" : "flex";
-  /* Pendant le parcours d'accueil, l'icône Réglages reste masquée : on
-     évite qu'un conseiller la contourne en tapant directement dessus avant
-     d'avoir répondu "Qui êtes-vous ?". */
-  document.getElementById("btn-settings").style.display = screenId==="onboarding" ? "none" : "flex";
+  document.getElementById("btn-back").style.display = (screenId==="home"||ONBOARDING_SCREENS.indexOf(screenId)!==-1) ? "none" : "flex";
+  /* Pendant tout le parcours d'accueil (y compris l'activité salariée et la
+     signature, obligatoires — voir ONBOARDING_SCREENS), l'icône Réglages
+     reste masquée : on évite qu'un conseiller la contourne en tapant
+     directement dessus avant d'avoir terminé. */
+  document.getElementById("btn-settings").style.display = ONBOARDING_SCREENS.indexOf(screenId)!==-1 ? "none" : "flex";
   var main = document.getElementById("main");
   clear(main);
   var screen = h("div", {class:"screen active", id:"screen-"+screenId});
@@ -2623,6 +2976,24 @@ function completeOnboarding(role, nextScreens){
   saveState();
   navStack = Array.isArray(nextScreens) ? nextScreens.slice() : [nextScreens || "home"];
   render(navStack[navStack.length-1]);
+  /* Un tout premier lancement ne connaît son sync.sectionCode qu'à
+     l'instant précis où ce parcours se termine (voir openJoinSectionSyncSheet
+     plus haut dans le parcours) — trop tard pour l'événement fb-sync-ready,
+     qui a très probablement déjà été ignoré une première fois faute de
+     code de section à ce moment-là (voir maybeAutoPullSection). On
+     retente donc ici, une fois que ce code existe réellement. */
+  maybeAutoPullSection();
+}
+/* Rôle + écran d'atterrissage déduits de state.profile.sectionRole, tel
+   que posé par l'administrateur sur la fiche choisie (voir
+   openPickMyMemberSheet -> selectMember). Factorisé ici pour être appelé
+   une fois le sous-parcours « activité salariée + signature » terminé
+   (voir renderers["onboarding-signature"]), sans dupliquer cette logique
+   déjà utilisée juste après le choix de la fiche. */
+function landingForSectionRole(){
+  if(state.profile.sectionRole==="president") return {role:"president-section", screens:["home","section-membres"]};
+  if(state.profile.sectionRole==="vice-president") return {role:"vice-president-section", screens:["home","section-membres"]};
+  return {role:"conseiller", screens:["home"]};
 }
 /* =================================================================
    PARCOURS D'ACCUEIL — REJOINDRE UNE SECTION
@@ -2663,10 +3034,13 @@ renderers.onboarding = function(root){
          ci-dessus et openPickMyMemberSheet -> selectMember, qui vient
          d'écrire state.profile.sectionRole avant cet appel). */
       openJoinSectionSyncSheet(function(m){
-        var role = "conseiller", screens = ["home"];
-        if(state.profile.sectionRole==="president"){ role = "president-section"; screens = ["home","section-membres"]; }
-        else if(state.profile.sectionRole==="vice-president"){ role = "vice-president-section"; screens = ["home","section-membres"]; }
-        completeOnboarding(role, screens);
+        /* Une fois identifié(e) (fiche choisie, ou explicitement passée via
+           « Je ne trouve pas mon nom » — m peut alors être null), demande
+           encore l'activité salariée puis la signature avant de considérer
+           l'accueil terminé (voir échange avec l'utilisateur) — la fonction
+           en section elle-même, déjà connue à ce stade, n'est appliquée
+           qu'à la toute fin (voir renderers["onboarding-signature"]). */
+        go("onboarding-activite");
       });
     }),
     roleCard("ic-building", "Président(e) de CPH", "Configuration classique pour l'instant, depuis Réglages", function(){
@@ -2681,6 +3055,91 @@ renderers.onboarding = function(root){
   );
   wrap.appendChild(grid);
   root.appendChild(wrap);
+};
+
+/* =================================================================
+   PARCOURS D'ACCUEIL — ACTIVITÉ SALARIÉE PUIS SIGNATURE
+   ------------------------------------------------------------------
+   Une fois identifié(e) (fiche choisie dans l'annuaire, ou explicitement
+   passée), l'accueil demande encore deux choses avant de se terminer,
+   toutes deux nécessaires à la feuille de vacations (voir échange avec
+   l'utilisateur) : l'activité salariée (obligatoire, avec le détail
+   posté/horaires) puis la signature (obligatoire). Uniquement sur le
+   parcours « Acteur(rice) de section » — voir renderers.onboarding — pas
+   sur « Président(e) de CPH », qui reste pour l'instant une redirection
+   simple vers Réglages (parcours dédié remis à plus tard). Ce
+   sous-parcours n'est traversé qu'au tout premier accueil : il ne
+   revient jamais s'imposer à une installation déjà en service. */
+renderers["onboarding-activite"] = function(root){
+  var p = state.profile;
+  var wrap = h("div", {class:"home-wrap"});
+  wrap.appendChild(h("div", {class:"hero"},
+    h("div", {class:"eyebrow"}, "Encore une étape"),
+    h("h1", null, "Votre activité salariée"),
+    h("p", null, "Ces informations servent à préparer votre feuille de vacations.")
+  ));
+  root.appendChild(wrap);
+
+  var panel = h("div", {class:"panel"});
+  panel.appendChild(boolField("Exercez-vous une activité salariée ?", p.remunere, function(v){ p.remunere=v; if(!v){ p.poste=null; } saveState(); render("onboarding-activite"); }));
+  if(p.remunere===true){
+    panel.appendChild(h("div", {style:"margin-top:14px"}, boolField("Êtes-vous posté(e) ?", p.poste, function(v){ p.poste=v; saveState(); render("onboarding-activite"); })));
+    panel.appendChild(h("label", {class:"field-label"}, "Horaires de travail habituels (optionnel)"));
+    var timeRow = h("div", {class:"btn-row"},
+      h("div", null,
+        h("label", {class:"field-label"}, "Début"),
+        h("select", {onchange:function(e){ p.horaireDebut=e.target.value; saveState(); }},
+          h("option", {value:"", selected: p.horaireDebut?null:"selected"}, "—"),
+          TIME_OPTIONS.map(function(t){ return h("option", {value:t[0], selected: t[0]===p.horaireDebut?"selected":null}, t[1]); }))
+      ),
+      h("div", null,
+        h("label", {class:"field-label"}, "Fin"),
+        h("select", {onchange:function(e){ p.horaireFin=e.target.value; saveState(); }},
+          h("option", {value:"", selected: p.horaireFin?null:"selected"}, "—"),
+          TIME_OPTIONS.map(function(t){ return h("option", {value:t[0], selected: t[0]===p.horaireFin?"selected":null}, t[1]); }))
+      )
+    );
+    panel.appendChild(timeRow);
+    panel.appendChild(h("div", {class:"footnote", style:"margin-top:8px"}, "Champ facultatif. Utile pour les calculs liés aux vacations postées."));
+  }
+  root.appendChild(panel);
+
+  var canContinue = p.remunere!==null && (p.remunere===false || p.poste!==null);
+  root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:18px", disabled: !canContinue, onclick:function(){
+    go("onboarding-signature");
+  }}, "Continuer"));
+  if(!canContinue){
+    root.appendChild(h("div", {class:"footnote", style:"margin-top:8px; text-align:center"},
+      p.remunere===null ? "Répondez à la question ci-dessus pour continuer." : "Précisez si vous êtes posté(e) pour continuer."));
+  }
+};
+
+renderers["onboarding-signature"] = function(root){
+  var p = state.profile;
+  var wrap = h("div", {class:"home-wrap"});
+  wrap.appendChild(h("div", {class:"hero"},
+    h("div", {class:"eyebrow"}, "Dernière étape"),
+    h("h1", null, "Votre signature"),
+    h("p", null, "Elle apparaîtra sur votre relevé de vacations, à la place d'un document à imprimer et signer à la main.")
+  ));
+  root.appendChild(wrap);
+
+  var continueBtn, hintFootnote;
+  function refreshContinueState(){
+    continueBtn.disabled = !p.signature;
+    hintFootnote.style.display = p.signature ? "none" : "";
+  }
+  root.appendChild(buildSignaturePanel(p, refreshContinueState));
+
+  root.appendChild(continueBtn = h("button", {class:"sheet-btn accent", style:"margin-top:18px", disabled: !p.signature, onclick:function(){
+    if(!p.signature) return;
+    if(p.presidentCph===null) p.presidentCph = false;
+    if(p.referiste===null) p.referiste = false;
+    saveState();
+    var landing = landingForSectionRole();
+    completeOnboarding(landing.role, landing.screens);
+  }}, "Terminer"));
+  root.appendChild(hintFootnote = h("div", {class:"footnote", style:"margin-top:8px; text-align:center; display:"+(p.signature?"none":"")}, "Enregistrez votre signature ci-dessus pour continuer."));
 };
 
 renderers["sysadmin-panel"] = function(root){
@@ -2824,28 +3283,39 @@ renderers["sysadmin-section"] = function(root){
   if(!adminBuffer.planning.length){
     planPanel.appendChild(h("div", {class:"footnote"}, "Aucune date enregistrée."));
   } else {
-    var infoList = h("div", {class:"info-list"});
-    adminBuffer.planning.slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); }).forEach(function(pl){
-      function nameFor(id){
-        var m = adminBuffer.sectionMembers.filter(function(x){ return x.id===id; })[0];
-        return m ? memberDisplayName(m) : null;
-      }
-      var people = [pl.president].concat(pl.assesseurs||[]).map(nameFor).filter(Boolean).join(", ");
-      infoList.appendChild(h("div", {class:"info-row"},
-        h("div", {class:"info-label"}, planningDateLabel(pl.date)+" — "+planningTypeLabel(pl.type)),
-        h("div", {class:"info-value", style:"display:flex; align-items:center; gap:8px; justify-content:flex-end; font-weight:400"},
-          h("span", null, people || "—"),
-          h("button", {class:"sheet-btn danger small", onclick:function(){
-            adminBuffer.planning = adminBuffer.planning.filter(function(p){ return p.id!==pl.id; });
-            render("sysadmin-section");
-          }}, "Suppr.")
+    /* L'espace administrateur n'est jamais restreint à un collège : une
+       seule ligne par audience (les deux collèges réunis, voir
+       openAudienceDetail), avec les deux boutons de modification proposés
+       dans la même vue — contrairement à « Outil de planification », où
+       chaque président/vice-président de section n'en voit qu'un. */
+    groupPlanningByAudience(adminBuffer.planning).forEach(function(g){
+      var people = audienceRosterLines(g, adminBuffer.sectionMembers).map(function(l){ return l.name; }).join(", ");
+      planPanel.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){ openAudienceDetailFromAdmin(g); },
+          onkeydown:function(e){ if(e.key==="Enter") openAudienceDetailFromAdmin(g); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, planningDateLabel(g.date)+" — "+planningTypeLabel(g.type)),
+          h("div", {class:"rc-sub"}, people || "—")
         )
       ));
     });
-    planPanel.appendChild(infoList);
   }
   root.appendChild(planPanel);
-  root.appendChild(h("div", {class:"footnote", style:"margin-top:10px"}, "L'ajout et la modification fine des dates de planning restent réservés, pour l'instant, aux appareils de la section elle-même — l'administration à distance permet ici la consultation et la suppression d'une date erronée."));
+  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ openAdminPlanningForm(null); }}, "+ Ajouter une date"));
+
+  /* Import JSON du planning, pendant administrateur de celui de l'annuaire
+     ci-dessus — voir handleAdminPlanningImportFile. */
+  var adminPlanningImportInput = h("input", {type:"file", accept:"application/json", style:"display:none", onchange:function(e){
+    var file = e.target.files[0]; if(!file) return;
+    handleAdminPlanningImportFile(file);
+    e.target.value = "";
+  }});
+  root.appendChild(adminPlanningImportInput);
+  root.appendChild(h("button", {
+    class:"discreet-icon-btn", type:"button", style:"margin-top:4px",
+    title:"Importer un planning (JSON)", "aria-label":"Importer un planning (JSON)",
+    onclick:function(){ adminPlanningImportInput.click(); }
+  }, icon("ic-upload")));
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:10px"}, "Ajout, modification et suppression d'une date, à la main ou par import JSON — le classement des rôles proposés reprend le même principe (nombre d'audiences déjà tenues) que sur les appareils de la section elle-même."));
 
   var actions = h("div", {style:"margin-top:20px; display:flex; flex-direction:column; gap:8px"});
   var saveBtn;
@@ -2916,7 +3386,13 @@ renderers.home = function(root){
       h("div", {class:"lbl"}, label)
     );
   }
-  function quickLinkAction(icon_id, label, onClick){
+  function quickLinkAction(icon_id, label, onClick, disabled){
+    if(disabled){
+      return h("div", {class:"quick-link disabled", "aria-disabled":"true"},
+        h("div", {class:"ic"}, icon(icon_id)),
+        h("div", {class:"lbl"}, label)
+      );
+    }
     return h("div", {class:"quick-link", onclick:onClick, tabindex:"0",
         onkeydown:function(e){ if(e.key==="Enter") onClick(); }},
       h("div", {class:"ic"}, icon(icon_id)),
@@ -2927,7 +3403,13 @@ renderers.home = function(root){
     state.profile.annuaireUrl ? quickLink("ic-users", "Annuaire", state.profile.annuaireUrl) : null,
     state.profile.cphWebUrl ? quickLink("ic-globe", "Site web", state.profile.cphWebUrl) : null,
     quickLinkAction("ic-calendar", "Mon planning", function(){ go("mon-planning"); }),
-    quickLinkAction("ic-chart", "Statistiques", function(){ go("stats"); })
+    /* Grisée temporairement à la demande de l'utilisateur : la moyenne
+       d'audiences par conseiller affichée sur cet écran ne reflète pas
+       encore les audiences à venir (seulement passées) -- le calcul est
+       à revoir avant de rouvrir l'accès à tout le monde. Voir la
+       discussion : « Ce n'est pas bon, je pense que tu n'as pas pris en
+       compte les audiences à venir. » */
+    quickLinkAction("ic-chart", "Statistiques", function(){ go("stats"); }, true)
   );
   wrap.appendChild(quickLinks);
 
@@ -3042,6 +3524,36 @@ function myInvolvedPlanningEntries(){
 
 var REDACTION_NATURE_IDS = NATURES.filter(function(n){ return n.isRedaction; }).map(function(n){ return n.id; });
 
+/* Conseillers « ordinaires » de la section pour le calcul de la moyenne
+   ci-dessous : président(e) et vice-président(e) de section en sont
+   exclus, sur demande explicite de l'utilisateur — leur charge d'audiences
+   n'est pas comparable à celle d'un(e) simple conseiller(e) (bien plus
+   d'audiences côté présidence, notamment), et les inclure fausserait la
+   moyenne dans les deux sens (numérateur ET dénominateur) si on les
+   comptait. */
+function eligibleConseillersForSectionAverage(){
+  return (state.sectionMembers||[]).filter(function(m){
+    return m.sectionRole!=="president" && m.sectionRole!=="vice-president";
+  });
+}
+
+/* Moyenne d'audiences (BJ + BCO/BCO MEE, année en cours) par conseiller
+   « ordinaire » de la section — président(e) et vice-président(e) exclus
+   à la fois du numérateur (leurs propres audiences ne sont pas comptées)
+   et du dénominateur (ils ne sont pas comptés comme un « conseiller » de
+   plus). Réutilise memberTotalAllTypesIn (déjà utilisé pour le classement
+   des candidats) sur le planning restreint à l'année en cours. Renvoie
+   null si la section n'a aucun conseiller ordinaire (moyenne non
+   calculable), plutôt que de diviser par zéro. */
+function sectionAverageAudiencesPerConseiller(){
+  var year = currentYearStr();
+  var eligible = eligibleConseillersForSectionAverage();
+  if(!eligible.length) return null;
+  var planningYear = (state.planning||[]).filter(function(p){ return p.date && p.date.slice(0,4)===year; });
+  var total = eligible.reduce(function(sum, m){ return sum + memberTotalAllTypesIn(planningYear, m.id); }, 0);
+  return total/eligible.length;
+}
+
 function computeMyActivityStats(){
   var year = currentYearStr();
   var today = todayISO();
@@ -3084,6 +3596,7 @@ function computeMyActivityStats(){
     bjDone: bjDone, bjUpcoming: bjUpcoming, bjTotal: bjDone+bjUpcoming,
     bcoDone: bcoDone, bcoUpcoming: bcoUpcoming, bcoTotal: bcoDone+bcoUpcoming,
     audiencesDone: audiencesDone, audiencesUpcoming: audiencesUpcoming, audiencesTotal: audiencesDone+audiencesUpcoming,
+    avgPerConseiller: sectionAverageAudiencesPerConseiller(),
     avgAudienceMin: avgMinutes(audienceVacYear),
     presidencesDone: presidencesDone, presidencesUpcoming: presidencesUpcoming, presidencesTotal: presidencesDone+presidencesUpcoming,
     redactionsDone: redactionVac.length,
@@ -3121,7 +3634,7 @@ function renderMyActivity(root){
     ["Réalisées", String(s.audiencesDone)],
     ["À venir", String(s.audiencesUpcoming)],
     ["Total", String(s.audiencesTotal)],
-    ["Moyenne par conseiller de la section", "Bientôt disponible"],
+    ["Moyenne par conseiller de la section", s.avgPerConseiller!=null ? s.avgPerConseiller.toFixed(1).replace(".", ",")+" audience"+(s.avgPerConseiller>=2?"s":"") : "—"],
     ["Durée moyenne d’une audience", s.avgAudienceMin!=null ? minutesLabel(s.avgAudienceMin) : "—"]
   ]);
   panel("Présidences", [
@@ -3298,7 +3811,7 @@ function vacationsEmailSubject(mKey){
 function shareOrMailtoRita(mKey, blob, filename){
   var to = (state.profile.vacationsEmail||"").trim();
   if(!to){
-    toast("Renseignez d’abord l’adresse email d’envoi des vacations dans Réglages → Paramètres avancés.");
+    toast("Aucune adresse email d’envoi des vacations n’est configurée pour votre CPH pour l’instant.");
     return;
   }
   var subject = vacationsEmailSubject(mKey);
@@ -4833,6 +5346,141 @@ function handleAdminMembersImportFile(file){
   reader.readAsText(file);
 }
 
+/* --- Import JSON du planning, côté espace administrateur uniquement ---
+   Pendant de normalizeMembersImportPayload/mergeMembersImportAdmin pour le
+   planning (voir échange avec l'utilisateur : « vérifier que l'admin peut
+   bien gérer le planning... en fichier json »). Format attendu : soit un
+   tableau d'entrées, soit un export contenant un tableau "planning" (même
+   souplesse que l'import d'annuaire). Chaque entrée réfère les personnes
+   par nom+prénom plutôt que par identifiant interne — les identifiants
+   sont propres à chaque appareil et ne correspondraient jamais d'un
+   import à l'autre :
+     {
+       "type": "bj" | "bco" | "bco-mee",
+       "date": "AAAA-MM-JJ",
+       "college": "Salarié" | "Employeur",
+       "presidence": "Salarié" | "Employeur",
+       "president": {"nom": "...", "prenom": "..."} | null,
+       "assesseurs": [{"nom": "...", "prenom": "..."}, ...]
+     }
+   Chaque nom est résolu parmi adminBuffer.sectionMembers, dans le collège
+   de l'entrée (voir openAdminPlanningForm : les rôles d'une date se
+   choisissent toujours parmi les conseillers du collège de la date, quelle
+   que soit la présidence) — un nom non trouvé n'empêche pas l'import du
+   reste de l'entrée, il est seulement signalé après coup (voir
+   mergeAdminPlanningImport) pour être corrigé à la main, puis récupéré en
+   réimportant le même fichier une fois l'annuaire complété. Une date déjà
+   présente (même date+type+collège) est mise à jour plutôt que dupliquée,
+   ce qui rend l'import rejouable sans risque. */
+function normalizePlanningImportPayload(parsed){
+  var list = Array.isArray(parsed) ? parsed
+    : (parsed && Array.isArray(parsed.planning)) ? parsed.planning
+    : null;
+  if(!list) return null;
+  var typeIds = PLANNING_TYPES.map(function(t){ return t.id; });
+  function normPerson(p){
+    if(!p || typeof p!=="object") return null;
+    var nom = (p.nom||"").toString().trim(), prenom = (p.prenom||"").toString().trim();
+    if(!nom && !prenom) return null;
+    return {nom:nom, prenom:prenom};
+  }
+  return list
+    .filter(function(e){
+      return e && typeof e==="object" && typeIds.indexOf(e.type)!==-1
+        && /^\d{4}-\d{2}-\d{2}$/.test(e.date||"")
+        && COLLEGES.indexOf(e.college)!==-1 && COLLEGES.indexOf(e.presidence)!==-1;
+    })
+    .map(function(e){
+      return {
+        type: e.type, date: e.date, college: e.college, presidence: e.presidence,
+        president: normPerson(e.president),
+        assesseurs: (Array.isArray(e.assesseurs) ? e.assesseurs : []).map(normPerson).filter(Boolean)
+      };
+    });
+}
+function mergeAdminPlanningImport(list){
+  var stats = {added:0, updated:0};
+  var unresolvedSet = {};
+  function norm(s){ return (s||"").trim().toLocaleLowerCase("fr-FR"); }
+  function resolve(person, college){
+    if(!person) return null;
+    var m = adminBuffer.sectionMembers.filter(function(x){
+      return (x.college||"")===college && norm(x.nom)===norm(person.nom) && norm(x.prenom)===norm(person.prenom);
+    })[0];
+    if(!m){
+      var label = [person.nom ? person.nom.toUpperCase() : "", person.prenom||""].filter(Boolean).join(" ")+" ("+college+")";
+      unresolvedSet[label] = true;
+      return null;
+    }
+    return m.id;
+  }
+  list.forEach(function(e){
+    var president = resolve(e.president, e.college);
+    var assesseurs = e.assesseurs.map(function(p){ return resolve(p, e.college); }).filter(Boolean);
+    var existing = adminBuffer.planning.filter(function(p){
+      return p.date===e.date && p.type===e.type && p.college===e.college;
+    })[0];
+    if(existing){
+      existing.presidence = e.presidence;
+      existing.president = president;
+      existing.assesseurs = assesseurs;
+      stats.updated++;
+    } else {
+      adminBuffer.planning.push({
+        id: uid(), type:e.type, date:e.date, college:e.college, presidence:e.presidence,
+        president: president, assesseurs: assesseurs, importSourceId: null
+      });
+      stats.added++;
+    }
+  });
+  stats.unresolved = Object.keys(unresolvedSet).sort();
+  return stats;
+}
+function openAdminPlanningImportConfirm(list){
+  if(list.length===0){
+    toast("Fichier lisible, mais aucune date de planning n’y a été trouvée.");
+    return;
+  }
+  openSheet("Importer un planning", h("div", null,
+    h("p", {class:"lede"}, list.length+(list.length>1 ? " dates trouvées dans le fichier." : " date trouvée dans le fichier.")),
+    h("p", {class:"lede"}, "Une date déjà enregistrée (même date, même type, même collège) sera mise à jour ; les autres seront ajoutées. Les personnes citées sont recherchées dans l’annuaire de cette section par nom, prénom et collège — une personne introuvable laisse simplement son rôle vide pour cette date, sans bloquer le reste de l’import."),
+    h("button", {class:"sheet-btn primary", onclick:function(){
+      var stats = mergeAdminPlanningImport(list);
+      closeSheet();
+      openAdminPlanningImportResultSheet(stats);
+    }}, "Importer"),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+  ));
+}
+function openAdminPlanningImportResultSheet(stats){
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, stats.added+" date(s) ajoutée(s), "+stats.updated+" mise(s) à jour."+(stats.unresolved.length ? "" : " Pensez à « Enregistrer et synchroniser ».")));
+  if(stats.unresolved.length){
+    body.appendChild(h("p", {class:"lede"}, "Personnes introuvables dans l’annuaire de cette section (rôle laissé vide pour les dates concernées — complétez l’annuaire puis réimportez le même fichier pour les rattacher) :"));
+    body.appendChild(h("div", {class:"info-list"}, stats.unresolved.map(function(name){
+      return h("div", {class:"info-row"}, h("div", {class:"info-label"}, name));
+    })));
+    body.appendChild(h("p", {class:"footnote", style:"margin-top:8px"}, "Pensez à « Enregistrer et synchroniser » une fois l'import terminé."));
+  }
+  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:12px", onclick:function(){ closeSheet(); render("sysadmin-section"); }}, "Continuer"));
+  openSheet("Import terminé", body);
+}
+function handleAdminPlanningImportFile(file){
+  var reader = new FileReader();
+  reader.onload = function(){
+    try{
+      var parsed = JSON.parse(reader.result);
+      var list = normalizePlanningImportPayload(parsed);
+      if(!list){
+        toast("Fichier illisible — attendu : un tableau de dates de planning, ou un export contenant un tableau « planning ».");
+        return;
+      }
+      openAdminPlanningImportConfirm(list);
+    }catch(err){ toast("Fichier illisible — vérifiez qu’il s’agit bien d’un fichier JSON."); }
+  };
+  reader.readAsText(file);
+}
+
 function memberSortCompare(a, b){
   var an = (a.nom||"").toLocaleLowerCase("fr-FR"), bn = (b.nom||"").toLocaleLowerCase("fr-FR");
   if(an !== bn) return an < bn ? -1 : 1;
@@ -5165,34 +5813,43 @@ function renderPresidentMembersTable(root, members){
    ================================================================= */
 
 /* Nombre de dates de planification d'un type donné (bj / bco / bco-mee)
-   où le conseiller est président ou assesseur. */
-function memberTotalForType(memberId, typeId){
+   où le conseiller est président ou assesseur, dans la liste de planning
+   fournie. Version générique (planningList explicite) sous-jacente à
+   memberTotalForType (state.planning) ET à son pendant de l'espace
+   administrateur (adminBuffer.planning — voir openAdminPlanningForm), pour
+   ne jamais dupliquer cette logique de classement entre les deux. */
+function memberTotalForTypeIn(planningList, memberId, typeId){
   var n = 0;
-  state.planning.forEach(function(pl){
+  planningList.forEach(function(pl){
     if(pl.type!==typeId) return;
     if(pl.president===memberId || pl.assesseurs.indexOf(memberId)!==-1) n++;
   });
   return n;
 }
-/* Nombre total d'audiences tous types confondus (BJ + BCO + BCO MEE). */
-function memberTotalAllTypes(memberId){
-  return PLANNING_TYPES.reduce(function(sum, t){ return sum + memberTotalForType(memberId, t.id); }, 0);
+/* Nombre total d'audiences tous types confondus (BJ + BCO + BCO MEE), dans
+   la liste de planning fournie. Version générique — voir memberTotalForTypeIn. */
+function memberTotalAllTypesIn(planningList, memberId){
+  return PLANNING_TYPES.reduce(function(sum, t){ return sum + memberTotalForTypeIn(planningList, memberId, t.id); }, 0);
 }
+function memberTotalForType(memberId, typeId){ return memberTotalForTypeIn(state.planning, memberId, typeId); }
+function memberTotalAllTypes(memberId){ return memberTotalAllTypesIn(state.planning, memberId); }
 
 /* Classement des candidats proposés : en premier critère, le nombre total
    d'audiences tous types confondus (du moins sollicité au plus sollicité) ;
    à égalité, le nombre d'audiences du même type que celle en cours de
-   planification ; à égalité encore, l'ordre alphabétique. */
-function rankedCandidates(collegeValue, typeId){
-  return state.sectionMembers
+   planification ; à égalité encore, l'ordre alphabétique. Version
+   générique (members/planningList explicites) — voir memberTotalForTypeIn. */
+function rankedCandidatesIn(members, planningList, collegeValue, typeId){
+  return members
     .filter(function(m){ return (m.college||"")===collegeValue; })
-    .map(function(m){ return { id:m.id, member:m, count: memberTotalForType(m.id, typeId), total: memberTotalAllTypes(m.id) }; })
+    .map(function(m){ return { id:m.id, member:m, count: memberTotalForTypeIn(planningList, m.id, typeId), total: memberTotalAllTypesIn(planningList, m.id) }; })
     .sort(function(a,b){
       if(a.total!==b.total) return a.total-b.total;
       if(a.count!==b.count) return a.count-b.count;
       return memberSortCompare(a.member, b.member);
     });
 }
+function rankedCandidates(collegeValue, typeId){ return rankedCandidatesIn(state.sectionMembers, state.planning, collegeValue, typeId); }
 
 function candidateOptionLabel(c, typeId){
   var unit = typeId==="bj" ? "BJ" : typeId==="bco" ? "BCO" : "BCO MEE";
@@ -5207,12 +5864,17 @@ function collegeSuffix(college){
   return college==="Salarié" ? " (S)" : college==="Employeur" ? " (E)" : "";
 }
 
-function resolveMemberName(id){
+/* Version générique (liste de conseillers explicite) sous-jacente à
+   resolveMemberName (state.sectionMembers) ET à la vue combinée d'une
+   audience côté espace administrateur (adminBuffer.sectionMembers — voir
+   openAudienceDetail), pour ne jamais dupliquer cette résolution. */
+function resolveMemberNameIn(members, id){
   if(!id) return "";
   if(id==="__self__") return "Moi-même"+(fullName(state.profile) ? " — "+fullName(state.profile)+collegeSuffix(state.profile.college) : "");
-  var m = state.sectionMembers.filter(function(x){ return x.id===id; })[0];
+  var m = members.filter(function(x){ return x.id===id; })[0];
   return m ? memberDisplayName(m)+collegeSuffix(m.college) : "(Conseiller supprimé)";
 }
+function resolveMemberName(id){ return resolveMemberNameIn(state.sectionMembers, id); }
 /* Même résolution que resolveMemberName, mais pour le document imprimé :
    l'utilisateur y apparaît sous la même forme « NOM Prénom » que les
    autres conseillers, sans la mention « Moi-même ». */
@@ -5238,13 +5900,20 @@ function planningEntryIncomplete(p){
   return filled < expected;
 }
 
-function openPlanningForm(existing, defaultType){
+/* prefill (facultatif) : {date, presidence} — ne s'applique qu'à la
+   création d'une toute nouvelle entrée (existing===null), pour reprendre
+   la date et la présidence d'une audience déjà connue par ailleurs (voir
+   openAudienceDetail, qui ouvre ce formulaire pour compléter SON PROPRE
+   collège sur une audience déjà visible mais pas encore renseignée de ce
+   côté) plutôt que de laisser la date vide comme pour un tout premier
+   ajout depuis « + Ajouter une date ». */
+function openPlanningForm(existing, defaultType, prefill){
   var isEdit = !!existing;
   var defaultCollege = state.profile.college || COLLEGES[0] || "";
-  var draft = existing ? Object.assign({}, existing, {assesseurs: existing.assesseurs.slice()}) : {
+  var draft = existing ? Object.assign({}, existing, {assesseurs: existing.assesseurs.slice()}) : Object.assign({
     id:uid(), type: defaultType || "bj", date:"", college: defaultCollege, presidence: defaultCollege,
     president:null, assesseurs:[]
-  };
+  }, prefill || {});
 
   var form = h("div", null);
 
@@ -5807,6 +6476,42 @@ function sectionBroadcastPayload(){
   };
 }
 
+/* Variante de sectionBroadcastPayload utilisée pour DÉRIVER automatiquement
+   « Mon planning » depuis le planning de section déjà synchronisé via
+   Firebase (voir syncMyPlanningFromSection et renderers["mon-planning"]),
+   plutôt que depuis un fichier reçu à la main de la présidence. Mêmes
+   annuaire et planning, mais from/fromTel doivent représenter le PRÉSIDENT
+   DE LA SECTION (annoncé par sectionRole sur l'annuaire), et non le profil
+   du présent appareil — contrairement à un export classique, cette
+   fonction peut être appelée depuis l'appareil d'un simple conseiller. */
+function sectionPlanningPayloadForSync(){
+  var payload = sectionBroadcastPayload();
+  var president = state.sectionMembers.filter(function(m){ return m.sectionRole==="president"; })[0];
+  payload.from = president ? memberDisplayName(president) : "";
+  payload.fromTel = president ? (president.tel||"") : "";
+  return payload;
+}
+/* Recalcule state.myPlanning depuis le planning de section déjà présent
+   localement (state.planning/state.sectionMembers, tenus à jour par la
+   synchronisation Firebase — voir maybeAutoPullSection), en réutilisant
+   TEL QUEL applyMyPlanningImport (même reconnaissance "audiences me
+   concernant", même fusion des deux collèges par « pendant ») : aucune
+   règle métier dupliquée entre le fichier reçu à la main et cette version
+   automatique — seule la provenance du payload change. Ne s'applique que
+   si la synchronisation est active ET que nom+prénom sont renseignés (même
+   condition que openMyPlanningImportConfirm, nécessaire à la reconnaissance
+   par nom) ; renvoie false sans rien changer sinon, laissant alors
+   renderers["mon-planning"] proposer l'alternative appropriée (import
+   manuel si pas de synchronisation, ou invitation à renseigner son profil
+   si la synchronisation est active mais l'identité pas encore connue). */
+function syncMyPlanningFromSection(){
+  if(!state.sync.sectionCode) return false;
+  if(!(state.profile.nom||"").trim() || !(state.profile.prenom||"").trim()) return false;
+  applyMyPlanningImport(sectionPlanningPayloadForSync());
+  saveState();
+  return true;
+}
+
 /* Entrées de planning utilisées pour l'image récapitulative jointe à la
    diffusion : le mois en cours et tout ce qui suit, sans limite de fin
    (contrairement au fichier JSON ci-dessus, qui lui reste sans aucune
@@ -6227,16 +6932,303 @@ function openMyPlanningEntryDetail(e){
   ));
   body.appendChild(panel);
 
-  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){ openSwapRequestInstructions(e); }}, "Demander un échange"));
+  /* Deux façons bien différentes de « demander un échange » selon que
+     l'appareil dispose ou non d'une synchronisation Firebase active (voir
+     échange avec l'utilisateur, demande du module ÉCHANGE AUTOMATISÉ
+     ci-dessous) : avec synchronisation, state.planning et
+     state.sectionMembers reflètent déjà toute la section (pas seulement
+     « Mon planning », dérivé) — l'application peut donc dérouler tout le
+     parcours (candidats classés, confirmation, choix de l'audience à
+     échanger, mise à jour Firebase) sans intervention du président. Sans
+     synchronisation, l'appareil n'a jamais eu accès qu'à son propre
+     planning personnel (fichier reçu à la main) : la demande reste alors
+     manuelle, jusqu'à une simple notification SMS au président
+     (comportement d'origine, entièrement inchangé — voir
+     openSwapRequestInstructions ci-dessous). */
+  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){
+    if(state.sync.sectionCode){ openExchangeRequest(e); } else { openSwapRequestInstructions(e); }
+  }}, "Demander un échange"));
   body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
 
   openSheet(planningDateLabel(e.date), body);
 }
 
-/* Étape 1 de la demande d'échange : marche à suivre — l'application ne
-   peut évidemment pas savoir qui accepte quoi, la démarche reste manuelle
-   (annuaire + accord écrit obligatoire) ; seule la notification finale au
-   président est automatisée. */
+/* =================================================================
+   ÉCHANGE AUTOMATISÉ (synchronisation Firebase active)
+   ------------------------------------------------------------------
+   Demande de l'utilisateur (parcours détaillé en quatre étapes) : depuis
+   une audience de « Mon planning », proposer d'abord les conseillers de
+   même section + même collège + même syndicat, classés du moins au plus
+   sollicité (même logique que l'outil de planification — voir
+   rankedCandidatesIn), avec leurs coordonnées (tél/email) pour un contact
+   hors application ; à défaut, les mêmes mais avec un syndicat différent ;
+   à défaut encore, prévenir que l'échange n'est pas possible. Dès qu'un
+   conseiller accepte, exiger la confirmation qu'un écrit de sa part existe
+   (case à cocher obligatoire) avant de proposer ses audiences à venir et
+   d'appliquer l'échange (state.planning ET Firestore mis à jour) —
+   contrairement au module ci-dessus (SMS au président), ici c'est
+   l'appareil du conseiller demandeur qui applique directement l'échange :
+   possible parce que la synchronisation Firebase donne accès en écriture
+   à n'importe quel acteur de la section (voir « Envoyer ma version
+   actuelle » en Réglages, déjà ouvert à tous, pas seulement à la
+   présidence — Firestore lui-même ne distingue pas les rôles, voir module
+   SYNCHRONISATION). Un échange ne change jamais le collège attaché à une
+   audience (le candidat proposé est toujours du même collège que la
+   personne qui échange), ce qui garantit que chacun reste qualifié pour
+   la place qu'il occupe après l'échange, dans les deux sens. */
+
+/* Retrouve, dans state.planning (données de section à jour, pas le
+   « Mon planning » dérivé et purement nominatif), la ligne réelle où
+   l'utilisateur apparaît pour une date+type donnés — nécessaire pour
+   pouvoir la modifier (id inclus), contrairement aux entrées de
+   state.myPlanning qui ne portent aucun identifiant technique. */
+function findOwnPlanningEntryFor(dateStr, typeId){
+  return state.planning.filter(function(p){
+    return p.date===dateStr && p.type===typeId
+      && (isSelfMemberId(p.president) || (p.assesseurs||[]).some(isSelfMemberId));
+  })[0] || null;
+}
+
+function openExchangeRequest(e){
+  if(!state.profile.memberId){
+    openSheet("Demander un échange", h("div", null,
+      h("p", {class:"lede"}, "Pour demander un échange, votre profil doit d’abord être lié à votre fiche dans l’annuaire de la section."),
+      h("button", {class:"sheet-btn primary", onclick:function(){ closeSheet(); go("settings"); }}, "Aller à Réglages"),
+      h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer")
+    ));
+    return;
+  }
+  var meMember = state.sectionMembers.filter(function(m){ return m.id===state.profile.memberId; })[0];
+  if(!meMember){
+    toast("Votre fiche est introuvable dans l’annuaire actuel de la section — actualisez depuis « Mon planning » puis réessayez.");
+    return;
+  }
+  var myEntry = findOwnPlanningEntryFor(e.date, e.type);
+  if(!myEntry){
+    toast("Cette audience est introuvable dans le planning actuel de la section — actualisez depuis « Mon planning » puis réessayez.");
+    return;
+  }
+  openExchangeCandidatesSheet(myEntry, meMember, 1);
+}
+
+/* Étape 1 (et son repli à l'étape 2) : liste des candidats, classés comme
+   pour l'outil de planification (rankedCandidatesIn), avec leurs
+   coordonnées. tier 1 = même syndicat ; tier 2 = syndicat différent, mais
+   même collège (jamais d'autre collège — voir commentaire du module
+   ci-dessus). Une liste vide saute automatiquement à l'étape suivante
+   plutôt que d'afficher une liste vide avec deux boutons sans objet. */
+function openExchangeCandidatesSheet(myEntry, meMember, tier){
+  var pool = state.sectionMembers.filter(function(m){
+    if(m.id===meMember.id) return false;
+    if((m.college||"")!==(meMember.college||"")) return false;
+    var sameSyndicat = (m.syndicat||"")===(meMember.syndicat||"");
+    return tier===1 ? sameSyndicat : !sameSyndicat;
+  });
+  if(pool.length===0){
+    if(tier===1){ openExchangeCandidatesSheet(myEntry, meMember, 2); return; }
+    openExchangeImpossibleSheet();
+    return;
+  }
+  var ranked = rankedCandidatesIn(pool, state.planning, meMember.college, myEntry.type);
+
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, tier===1
+    ? "Conseillers de votre collège et de votre syndicat, classés du moins au plus sollicité :"
+    : "Aucun conseiller de votre syndicat n’a accepté — conseillers de votre collège mais d’un autre syndicat, classés du moins au plus sollicité :"));
+  body.appendChild(h("p", {class:"lede", style:"font-weight:600"}, "Contactez en priorité les conseillers ci-dessous dans l’ordre indiqué."));
+
+  ranked.forEach(function(c){
+    var m = c.member;
+    var digits = (m.tel||"").replace(/\D/g, "");
+    body.appendChild(h("div", {class:"panel", style:"margin-bottom:10px; padding:12px 14px;"},
+      h("div", {style:"display:flex; justify-content:space-between; align-items:baseline; gap:8px;"},
+        h("div", {style:"font-weight:600"}, memberDisplayName(m)),
+        h("div", {class:"footnote"}, c.total+" audience"+(c.total>1?"s":"")+" au total")
+      ),
+      h("div", {class:"info-list", style:"margin-top:6px"},
+        h("div", {class:"info-row"},
+          h("div", {class:"info-label"}, "Téléphone"),
+          m.tel ? h("a", {href:"tel:"+digits, class:"info-value"}, formatTelFR(m.tel)) : h("div", {class:"info-value"}, "—")),
+        h("div", {class:"info-row"},
+          h("div", {class:"info-label"}, "Email"),
+          m.email ? h("a", {href:"mailto:"+m.email, class:"info-value"}, m.email) : h("div", {class:"info-value"}, "—"))
+      )
+    ));
+  });
+
+  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:function(){
+    openExchangeAcceptedPicker(myEntry, meMember, ranked, tier);
+  }}, "L’un d’eux a accepté l’échange"));
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
+    if(tier===1){ openExchangeCandidatesSheet(myEntry, meMember, 2); }
+    else { openExchangeImpossibleSheet(); }
+  }}, "Aucun n’a accepté l’échange"));
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
+
+  openSheet("Demander un échange", body);
+}
+
+function openExchangeImpossibleSheet(){
+  openSheet("Demander un échange", h("div", null,
+    h("p", {class:"lede"}, "Aucun conseiller de votre collège n’a accepté l’échange — l’échange n’est pas possible pour cette audience."),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Fermer")
+  ));
+}
+
+/* Étape 2 : qui, dans la liste qui vient d'être présentée, a effectivement
+   accepté (bouton unique « L'un d'eux » — encore fallait-il préciser
+   lequel). Un simple <select>, comme pour la notification SMS existante
+   (openSwapNotifyPicker), plutôt qu'une liste de coordonnées à nouveau
+   cliquable (déjà affichée juste avant, purement informative). */
+function openExchangeAcceptedPicker(myEntry, meMember, ranked, tier){
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, "Qui a accepté l’échange ?"));
+  body.appendChild(h("label", {class:"field-label"}, "Conseiller"));
+  var sel = h("select", null,
+    [h("option", {value:"", selected:"selected"}, "— Choisir —")].concat(
+      ranked.map(function(c, i){ return h("option", {value:String(i)}, memberDisplayName(c.member)); })
+    )
+  );
+  body.appendChild(sel);
+  var nextBtn = h("button", {class:"sheet-btn accent", style:"margin-top:14px", disabled:"disabled", onclick:function(){
+    var chosen = ranked[Number(sel.value)];
+    if(!chosen) return;
+    openExchangeConfirmSheet(myEntry, meMember, chosen.member);
+  }}, "Continuer");
+  sel.addEventListener("change", function(){ nextBtn.disabled = !sel.value; });
+  body.appendChild(nextBtn);
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ openExchangeCandidatesSheet(myEntry, meMember, tier); }}, "Retour"));
+  openSheet("Demander un échange", body);
+}
+
+/* Étape 3 : confirmation obligatoire d'un écrit — case à cocher (jamais
+   pré-cochée), bouton de validation désactivé tant qu'elle ne l'est pas
+   (voir échange avec l'utilisateur : « une fenêtre de confirmation
+   apparait demandant à l'utilisateur de cocher une case comme quoi il
+   dispose d'un écrit... ce n'est qu'une fois que la case est cochée que
+   l'utilisateur peut valider »). Rien n'est modifié à ce stade : seule
+   l'étape suivante (choix de l'audience) déclenche réellement l'échange. */
+function openExchangeConfirmSheet(myEntry, meMember, candidateMember){
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"},
+    "Avant de continuer, confirmez que vous disposez bien d’un ",
+    h("span", {style:"font-weight:700; text-decoration:underline"}, "écrit"),
+    " (mail ou SMS) de "+memberDisplayName(candidateMember)+" actant son accord pour cet échange."
+  ));
+
+  var label = h("label", {style:"display:flex; align-items:flex-start; gap:8px; margin-top:12px; cursor:pointer;"});
+  var checkbox = h("input", {type:"checkbox"});
+  label.appendChild(checkbox);
+  label.appendChild(h("span", null, "Je dispose d’un écrit de "+memberDisplayName(candidateMember)+" actant son accord pour cet échange."));
+  body.appendChild(label);
+
+  var nextBtn = h("button", {class:"sheet-btn accent", style:"margin-top:14px", disabled:"disabled", onclick:function(){
+    openExchangeTargetPicker(myEntry, meMember, candidateMember);
+  }}, "Valider l’échange");
+  checkbox.addEventListener("change", function(){ nextBtn.disabled = !checkbox.checked; });
+  body.appendChild(nextBtn);
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler"));
+
+  openSheet("Confirmer l’échange", body);
+}
+
+/* Étape 4 : choix, parmi les audiences À VENIR du conseiller ayant
+   accepté, de celle qui sera échangée contre la sienne — exclut par
+   sécurité toute ligne qui contiendrait déjà l'un ou l'autre des deux
+   conseillers (ne devrait jamais arriver en pratique, myEntry et cette
+   liste portant sur deux personnes distinctes, mais évite un échange
+   incohérent si jamais une même audience impliquait déjà les deux). Un
+   conseiller sans aucune audience à venir ne peut par construction rien
+   échanger : message dédié plutôt qu'une liste vide. */
+function openExchangeTargetPicker(myEntry, meMember, candidateMember){
+  var today = todayISO();
+  var candidateEntries = state.planning.filter(function(p){
+    if(p.id===myEntry.id) return false;
+    if(p.date<today) return false;
+    var candidatePresent = p.president===candidateMember.id || (p.assesseurs||[]).indexOf(candidateMember.id)!==-1;
+    if(!candidatePresent) return false;
+    var mePresent = p.president===meMember.id || (p.assesseurs||[]).indexOf(meMember.id)!==-1;
+    return !mePresent;
+  }).sort(function(a,b){ return a.date<b.date ? -1 : a.date>b.date ? 1 : 0; });
+
+  if(candidateEntries.length===0){
+    openSheet("Demander un échange", h("div", null,
+      h("p", {class:"lede"}, memberDisplayName(candidateMember)+" n’a aucune audience à venir sur laquelle échanger — l’échange n’est pas possible avec cette personne."),
+      h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Fermer")
+    ));
+    return;
+  }
+
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, "Choisissez l’audience de "+memberDisplayName(candidateMember)+" à échanger contre la vôtre :"));
+  var list = h("div", null);
+  candidateEntries.forEach(function(p){
+    var roleTxt = p.president===candidateMember.id ? "Préside" : "Assesseur";
+    list.appendChild(h("div", {class:"row-click", onclick:function(){
+      performExchange(myEntry, meMember, p, candidateMember);
+    }},
+      h("div", {class:"rc-main"},
+        h("div", {class:"rc-title"}, planningDateLabel(p.date)),
+        h("div", {class:"rc-sub"}, roleTxt+" · "+planningTypeLabel(p.type)+" · Collège "+(p.college||"—").toLowerCase())
+      ),
+      icon("ic-chev", "chev")
+    ));
+  });
+  body.appendChild(h("div", {class:"panel"}, list));
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:14px", onclick:closeSheet}, "Annuler"));
+
+  openSheet("Choisir l’audience", body);
+}
+
+/* Applique réellement l'échange : remplace, dans chacune des deux lignes
+   réelles de state.planning, l'un des deux conseillers par l'autre (rôle
+   et collège de la ligne inchangés — voir commentaire du module) puis
+   enregistre et pousse immédiatement vers Firestore (comme « Envoyer ma
+   version actuelle » en Réglages, ouvert à tout acteur synchronisé). En
+   cas d'échec d'envoi (hors ligne, par exemple), l'échange reste appliqué
+   localement — jamais perdu — avec une invitation claire à renvoyer
+   depuis Réglages dès que possible, plutôt que de faire disparaître
+   silencieusement le travail de négociation qui vient d'aboutir. */
+function performExchange(myEntry, meMember, candidateEntry, candidateMember){
+  function swapIn(entry, oldId, newId){
+    if(entry.president===oldId) entry.president = newId;
+    entry.assesseurs = (entry.assesseurs||[]).map(function(id){ return id===oldId ? newId : id; });
+  }
+  swapIn(myEntry, meMember.id, candidateMember.id);
+  swapIn(candidateEntry, candidateMember.id, meMember.id);
+  saveState();
+  closeSheet();
+  toast("Échange enregistré — envoi à la section en cours…");
+  var cph = cphLabel(state.profile) || state.profile.cph || "";
+  var section = state.profile.section || "";
+  pushSectionSync(state.sync.sectionCode, cph, section).then(function(){
+    markSyncDone();
+    toast("Échange enregistré et envoyé à la section.");
+    render("mon-planning");
+  }).catch(function(err){
+    /* Un simple renvoi vers « Réglages > Synchronisation > Envoyer mes
+       modifications » ne convient plus ici : ce bouton est désormais
+       réservé à président(e)/vice-président(e) (voir Réglages), alors
+       que n'importe quel conseiller synchronisé peut se retrouver ici.
+       Offrir un vrai bouton « Réessayer » sur place évite ce problème,
+       quel que soit le rôle de la personne. */
+    render("mon-planning");
+    openSheet("Envoi à la section échoué", h("div", null,
+      h("p", {class:"lede"}, "L’échange est bien enregistré sur cet appareil, mais l’envoi à la section a échoué — vérifiez votre connexion."),
+      h("button", {class:"sheet-btn accent", onclick:function(){
+        pushSectionSync(state.sync.sectionCode, cph, section).then(function(){
+          markSyncDone(); closeSheet(); toast("Échange envoyé à la section.");
+        }).catch(function(){ toast("Échec de l’envoi — réessayez plus tard."); });
+      }}, "Réessayer l’envoi"),
+      h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Plus tard")
+    ));
+  });
+}
+
+/* Étape 1 de la demande d'échange manuelle (sans synchronisation) : marche
+   à suivre — l'application ne peut évidemment pas savoir qui accepte
+   quoi, la démarche reste manuelle (annuaire + accord écrit obligatoire) ;
+   seule la notification finale au président est automatisée. */
 function openSwapRequestInstructions(e){
   var body = h("div", null);
   body.appendChild(h("p", {class:"lede"}, "Contactez les autres conseillers de votre section et collège en utilisant l’annuaire."));
@@ -6264,7 +7256,7 @@ function openSwapNotifyPicker(e){
 
   if(candidates.length===0){
     openSheet("Notifier un échange", h("div", null,
-      h("p", {class:"lede"}, "Aucun autre conseiller de votre collège n’est disponible dans le fichier reçu — demandez à la présidence de section de vous transmettre une version à jour du planning (bouton « Importer une nouvelle version »)."),
+      h("p", {class:"lede"}, "Aucun autre conseiller de votre collège n’est disponible dans "+(state.sync.sectionCode ? "l’annuaire de la section — vérifiez qu’il est à jour (bouton « Actualiser depuis la section »)." : "le fichier reçu — demandez à la présidence de section de vous transmettre une version à jour du planning (bouton « Importer une nouvelle version »).")),
       h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Fermer")
     ));
     return;
@@ -6302,6 +7294,27 @@ function openSwapNotifyPicker(e){
 }
 
 renderers["mon-planning"] = function(root){
+  /* Quand la synchronisation Firebase est active, ce planning personnel
+     se recalcule à chaque affichage depuis le planning de section déjà
+     présent localement (state.planning), lui-même tenu à jour par
+     maybeAutoPullSection au lancement et par la récupération manuelle
+     (voir Réglages > Synchronisation, ou le bouton "Actualiser" plus bas)
+     — plus besoin d'attendre un fichier envoyé à la main. Sans
+     synchronisation active, le fonctionnement reste inchangé : un fichier
+     reçu de la présidence, importé manuellement ci-dessous. */
+  var syncActive = !!state.sync.sectionCode;
+  var derivedFromSync = syncActive ? syncMyPlanningFromSection() : false;
+
+  if(syncActive && !derivedFromSync){
+    root.appendChild(h("p", {class:"lede"}, "Votre planning personnel se calcule automatiquement depuis celui de la section, dès que votre nom et votre prénom sont renseignés."));
+    root.appendChild(h("div", {class:"panel"},
+      h("div", {class:"init-empty", style:"min-height:auto; padding:24px 4px;"},
+        h("p", null, "Renseignez votre nom et votre prénom dans Réglages > Votre profil pour afficher votre planning personnel."))
+    ));
+    root.appendChild(h("button", {class:"sheet-btn primary", style:"margin-top:14px", onclick:function(){ go("settings"); }}, "Aller à Réglages"));
+    return;
+  }
+
   var mine = state.myPlanning || DEFAULT_STATE.myPlanning;
 
   if(!mine.importedAt){
@@ -6319,7 +7332,11 @@ renderers["mon-planning"] = function(root){
   var importedDate = null;
   try{ importedDate = new Date(mine.importedAt); }catch(e){}
   var whenTxt = importedDate && !isNaN(importedDate) ? importedDate.toLocaleDateString("fr-FR") : "";
-  root.appendChild(h("p", {class:"lede"}, "Planning reçu"+(mine.from ? " de "+mine.from : "")+(whenTxt ? " le "+whenTxt : "")+" — lecture seule ; seule la présidence de section peut le mettre à jour."));
+  root.appendChild(h("p", {class:"lede"},
+    syncActive
+      ? "Planning de la section"+(mine.from ? " (président·e : "+mine.from+")" : "")+", actualisé automatiquement — lecture seule ; seule la présidence de section peut le modifier."
+      : "Planning reçu"+(mine.from ? " de "+mine.from : "")+(whenTxt ? " le "+whenTxt : "")+" — lecture seule ; seule la présidence de section peut le mettre à jour."
+  ));
 
   var mode = "month";
   var monthVal = monthKey(todayISO());
@@ -6379,9 +7396,17 @@ renderers["mon-planning"] = function(root){
   root.appendChild(listBox);
   renderList();
 
-  var refreshInput = myPlanningImportInput();
-  root.appendChild(refreshInput);
-  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:16px", onclick:function(){ refreshInput.click(); }}, "Importer une nouvelle version"));
+  if(syncActive){
+    /* Le rechargement automatique au lancement (voir maybeAutoPullSection)
+       couvre l'essentiel, mais reste volontairement silencieux ; ce
+       bouton offre le même geste explicite qu'en Réglages > Synchronisation
+       pour qui veut forcer une actualisation immédiate sans y retourner. */
+    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:16px", onclick:function(){ confirmAndPullSection("mon-planning"); }}, "Actualiser depuis la section"));
+  } else {
+    var refreshInput = myPlanningImportInput();
+    root.appendChild(refreshInput);
+    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:16px", onclick:function(){ refreshInput.click(); }}, "Importer une nouvelle version"));
+  }
 };
 
 /* Sheet « Aller à un mois » de l'outil de planification : les flèches
@@ -6443,30 +7468,42 @@ renderers["planification"] = function(root){
     root.appendChild(nav);
   }
 
-  var entries = state.planning
-    .filter(function(p){
-      if(planningViewType==="incomplete") return planningEntryIncomplete(p);
-      return monthKey(p.date)===planningViewMonth;
+  var role = state.profile.sectionRole;
+  /* Chaque conseiller (président ou vice-président) voit désormais TOUTE
+     l'audience — les deux collèges réunis, voir openAudienceDetail — mais
+     ne peut en modifier que son propre collège : une seule ligne par
+     audience (groupPlanningByAudience), plutôt que jusqu'à deux, une par
+     collège, comme précédemment. */
+  var myEditableColleges = (role==="president" || role==="vice-president") && state.profile.college ? [state.profile.college] : [];
+  var groups = groupPlanningByAudience(state.planning)
+    .filter(function(g){
+      if(planningViewType==="incomplete") return mergedEntryCompleteness(mergedRecordFromGroup(g)).incomplete;
+      return monthKey(g.date)===planningViewMonth;
     })
     .sort(function(a,b){ return a.date<b.date ? -1 : 1; });
 
   var panel = h("div", {class:"panel"});
-  if(entries.length===0){
+  if(groups.length===0){
     panel.appendChild(h("p", {class:"lede", style:"margin:0"}, planningViewType==="incomplete" ? "Aucune audience incomplète." : "Aucune date enregistrée pour ce mois."));
   } else {
-    entries.forEach(function(p){
-      var roles = [];
-      if(p.president) roles.push("Président : "+resolveMemberName(p.president));
-      p.assesseurs.forEach(function(a, i){
-        roles.push((p.assesseurs.length>1 ? "Assesseur "+(i+1)+" : " : "Assesseur : ")+resolveMemberName(a));
-      });
-      var sub = planningTypeLabel(p.type)+" · Collège "+(p.college||"—").toLowerCase()+" · Présidence "+(p.presidence==="Salarié"?"salariée":p.presidence==="Employeur"?"employeur":"—");
-      var incomplete = planningEntryIncomplete(p);
-      panel.appendChild(h("div", {class:"row-click"+(incomplete ? " incomplete" : ""), onclick:function(){ openPlanningForm(p); }},
+    groups.forEach(function(g){
+      var roles = audienceRosterLines(g, state.sectionMembers).map(function(l){ return l.role+" : "+l.name; });
+      var sub = planningTypeLabel(g.type)+" · Présidence "+(g.presidence==="Salarié"?"salariée":g.presidence==="Employeur"?"employeur":"—");
+      var incomplete = mergedEntryCompleteness(mergedRecordFromGroup(g)).incomplete;
+      panel.appendChild(h("div", {class:"row-click"+(incomplete ? " incomplete" : ""), onclick:function(){
+        openAudienceDetail(g, {
+          members: state.sectionMembers,
+          editableColleges: myEditableColleges,
+          onEdit: function(col){
+            var existing = g.byCollege[col] || null;
+            openPlanningForm(existing, g.type, existing ? null : {date:g.date, presidence:g.presidence});
+          }
+        });
+      }},
         h("div", {class:"rc-main"},
           h("div", {class:"rc-title"},
             incomplete ? h("span", {class:"warn-blink", title:"Conseiller manquant"}, "⚠ ") : null,
-            planningDateLabel(p.date)
+            planningDateLabel(g.date)
           ),
           h("div", {class:"rc-sub"}, (incomplete ? "Conseiller manquant · " : "") + sub + (roles.length ? " · "+roles.join(" · ") : ""))
         ),
@@ -6475,8 +7512,6 @@ renderers["planification"] = function(root){
     });
   }
   root.appendChild(panel);
-
-  var role = state.profile.sectionRole;
 
   /* Seul le président crée les audiences de la section ; le vice-président
      ne fait que compléter, avec les conseillers de son collège, les dates
@@ -6591,6 +7626,132 @@ renderers["planification"] = function(root){
     if(btn.disabled && btn.title) root.appendChild(h("div", {class:"footnote", style:"margin-top:2px"}, btn.title));
   });
 };
+
+/* =================================================================
+   VUE COMBINÉE D'UNE AUDIENCE (les deux collèges réunis)
+   ------------------------------------------------------------------
+   Demande de l'utilisateur : sur une audience, tout le monde doit voir
+   TOUS les conseillers concernés (salariés ET employeurs — 2 pour un BCO,
+   4 pour un BJ), alors que chaque ligne de state.planning/adminBuffer.
+   planning ne porte jamais que les conseillers d'UN SEUL collège (voir
+   openPlanningForm/openAdminPlanningForm : chaque président de collège ne
+   saisit que ses propres conseillers). Le président et le vice-président
+   voient donc désormais tout, mais ne peuvent modifier que leur propre
+   collège (un seul bouton d'édition, vers leur propre ligne) ; côté espace
+   administrateur, qui n'est jamais restreint à un collège, les DEUX
+   boutons d'édition sont proposés dans la même vue.
+   ================================================================= */
+
+/* Regroupe des lignes de planning (state.planning ou adminBuffer.planning)
+   par audience réelle (même date + même type), en conservant la ligne de
+   CHAQUE collège séparément (byCollege) plutôt que de les fusionner en une
+   seule liste de rôles comme mergePlanningEntriesForDisplay ci-dessous —
+   nécessaire ici pour pouvoir rouvrir précisément la ligne d'un collège
+   donné en modification. */
+function groupPlanningByAudience(records){
+  var groups = {}, order = [];
+  records.forEach(function(pl){
+    var key = pl.date+"|"+pl.type;
+    if(!groups[key]){ groups[key] = { date: pl.date, type: pl.type, presidence: pl.presidence, byCollege: {} }; order.push(key); }
+    groups[key].byCollege[pl.college] = pl;
+    /* La présidence est dupliquée sur les deux lignes (chaque collège
+       enregistre sa propre copie) ; en cas de désaccord entre les deux
+       (rare — normalement saisi de façon cohérente des deux côtés), on
+       fait confiance à la copie du collège qui préside réellement,
+       comme mergePlanningEntriesForDisplay. */
+    if(pl.college===pl.presidence) groups[key].presidence = pl.presidence;
+  });
+  return order.map(function(k){ return groups[k]; }).sort(function(a,b){
+    if(a.date!==b.date) return a.date<b.date ? -1 : 1;
+    return (PLANNING_TYPE_ORDER[a.type]||0) - (PLANNING_TYPE_ORDER[b.type]||0);
+  });
+}
+
+/* Forme « fusionnée » minimale d'un groupe (voir groupPlanningByAudience),
+   pour pouvoir réutiliser mergedEntryCompleteness ci-dessous sans dupliquer
+   son calcul de complétude côté vue combinée. */
+function mergedRecordFromGroup(group){
+  var presidingEntry = group.byCollege[group.presidence] || null;
+  var assesseurs = [];
+  COLLEGES.forEach(function(c){ var e = group.byCollege[c]; if(e) assesseurs = assesseurs.concat(e.assesseurs||[]); });
+  return { type: group.type, president: presidingEntry ? presidingEntry.president : null, assesseurs: assesseurs };
+}
+
+/* Liste ordonnée { role, name } de tous les conseillers d'une audience
+   groupée, collège par collège — le nom porte déjà la mention (S)/(E) via
+   resolveMemberNameIn, donc pas besoin de la répéter dans le rôle. */
+function audienceRosterLines(group, members){
+  var lines = [];
+  COLLEGES.forEach(function(col){
+    var entry = group.byCollege[col];
+    if(!entry) return;
+    if(entry.president) lines.push({ role:"Président", name: resolveMemberNameIn(members, entry.president) });
+    (entry.assesseurs||[]).forEach(function(a, i){
+      lines.push({ role: (entry.assesseurs.length>1 ? "Assesseur "+(i+1) : "Assesseur"), name: resolveMemberNameIn(members, a) });
+    });
+  });
+  return lines;
+}
+
+/* Sheet de détail d'une audience groupée : affiche TOUJOURS les deux
+   collèges réunis, et propose un bouton de modification par collège
+   présent dans opts.editableColleges — un seul (le sien) pour un
+   président/vice-président de section, les deux pour l'espace
+   administrateur. opts : { members, editableColleges:[...], onEdit(college) }. */
+function openAudienceDetail(group, opts){
+  opts = opts || {};
+  var members = opts.members || state.sectionMembers;
+  var editableColleges = opts.editableColleges || [];
+  var body = h("div", null);
+  var sub = planningTypeLabel(group.type)+" · Présidence "+(group.presidence==="Salarié"?"salariée":group.presidence==="Employeur"?"employeur":"—");
+  body.appendChild(h("p", {class:"lede"}, sub));
+
+  var panel = h("div", {class:"panel"});
+  var lines = audienceRosterLines(group, members);
+  if(!lines.length){
+    panel.appendChild(h("p", {class:"lede", style:"margin:0"}, "Aucun conseiller renseigné pour l’instant."));
+  } else {
+    lines.forEach(function(l){
+      panel.appendChild(h("div", {style:"margin-bottom:10px"},
+        h("div", {class:"field-label"}, l.role),
+        h("div", null, l.name)
+      ));
+    });
+  }
+  COLLEGES.forEach(function(col){
+    if(!group.byCollege[col]){
+      panel.appendChild(h("div", {class:"footnote", style: lines.length ? "margin-top:2px" : "margin-top:8px"}, "Collège "+col.toLowerCase()+" : rien renseigné pour l’instant."));
+    }
+  });
+  body.appendChild(panel);
+
+  if(mergedEntryCompleteness(mergedRecordFromGroup(group)).incomplete){
+    body.appendChild(h("p", {class:"footnote", style:"margin-top:8px;color:var(--red)"}, "⚠ Audience incomplète — il manque au moins un conseiller."));
+  }
+
+  editableColleges.forEach(function(col, i){
+    body.appendChild(h("button", {class:"sheet-btn "+(i===0 ? "accent" : "ghost"), style:"margin-top:10px", onclick:function(){ opts.onEdit(col); }},
+      editableColleges.length>1 ? "Modifier le collège "+col : "Modifier mes conseillers ("+col+")"
+    ));
+  });
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
+
+  openSheet(planningDateLabel(group.date), body);
+}
+
+/* Ouvre openAudienceDetail pour l'espace administrateur (adminBuffer) :
+   les deux collèges sont toujours modifiables, contrairement à « Outil de
+   planification » (voir renderers["planification"] ci-dessus). */
+function openAudienceDetailFromAdmin(group){
+  openAudienceDetail(group, {
+    members: adminBuffer.sectionMembers,
+    editableColleges: COLLEGES.slice(),
+    onEdit: function(col){
+      var existing = group.byCollege[col] || null;
+      openAdminPlanningForm(existing, group.type, existing ? null : {date:group.date, presidence:group.presidence, college:col});
+    }
+  });
+}
 
 /* Fusionne, pour un même jour et un même type d'audience, l'enregistrement
    de chaque collège (chaque co-président ne saisit que les conseillers de
@@ -7187,7 +8348,7 @@ renderers["liens-utiles"] = function(root){
 
   if(visible.length===0){
     root.appendChild(h("div", {class:"init-empty"},
-      h("p", null, "Aucun lien n’est renseigné pour l’instant. Ajoutez-les dans Réglages → Paramètres avancés.")
+      h("p", null, "Aucun lien n’est configuré pour votre CPH pour l’instant.")
     ));
     return;
   }
@@ -7207,7 +8368,7 @@ renderers["liens-utiles"] = function(root){
   root.appendChild(panel);
 
   if(visible.length < links.length){
-    root.appendChild(h("div", {class:"footnote"}, "D’autres liens apparaîtront ici dès qu’ils seront renseignés dans Réglages → Paramètres avancés."));
+    root.appendChild(h("div", {class:"footnote"}, "D’autres liens apparaîtront ici automatiquement dès qu’ils seront configurés pour votre CPH."));
   }
 };
 
@@ -7384,7 +8545,13 @@ function choiceField(label, value, options, onSet){
    Une fois enregistrée, la signature est apposée automatiquement sur le
    relevé de vacations (RITA), en plus de la mention de validation
    horodatée déjà existante (voir buildVacationsCanvases / printVacations). */
-function buildSignaturePanel(p){
+/* onSignatureChange (facultatif) est rappelé après chaque enregistrement
+   ou suppression de la signature, en plus de la mise à jour normale de
+   l'aperçu — utilisé par renderers["onboarding-signature"] pour réactiver
+   son bouton « Continuer » dès qu'une signature existe (voir plus bas),
+   sans quoi il resterait bloqué sur l'état capturé au premier rendu. Le
+   panneau reste sinon rigoureusement identique à celui de Réglages. */
+function buildSignaturePanel(p, onSignatureChange){
   var panel = h("div", {class:"panel"});
   var previewWrap = h("div", null);
   var padWrap = h("div", {style:"display:none;"});
@@ -7444,7 +8611,7 @@ function buildSignaturePanel(p){
       p.signature ? h("button", {class:"sheet-btn danger", onclick:function(){
         openSheet("Supprimer la signature", h("div", null,
           h("p", {class:"lede"}, "Votre relevé de vacations n’inclura plus de signature manuscrite à partir de maintenant."),
-          h("button", {class:"sheet-btn danger", onclick:function(){ p.signature=""; saveState(); closeSheet(); render("settings"); }}, "Supprimer"),
+          h("button", {class:"sheet-btn danger", onclick:function(){ p.signature=""; saveState(); closeSheet(); if(onSignatureChange){ onSignatureChange(); } else { render("settings"); } }}, "Supprimer"),
           h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
         ));
       }}, "Supprimer") : null
@@ -7462,6 +8629,7 @@ function buildSignaturePanel(p){
       saveState();
       toast("Signature enregistrée.");
       showPreview();
+      if(onSignatureChange) onSignatureChange();
     }}, "Enregistrer la signature"),
     h("button", {class:"sheet-btn ghost", onclick:function(){ showPreview(); }}, "Annuler")
   ));
@@ -7498,72 +8666,39 @@ renderers.settings = function(root){
     }
   }
 
-  root.appendChild(h("div", {class:"section-title"}, "Sauvegarde"));
-  var lastBackupTxt = "Aucune sauvegarde effectuée pour l’instant.";
-  if(state.lastBackupAt){
-    var bd = new Date(state.lastBackupAt);
-    lastBackupTxt = "Dernière sauvegarde le "+bd.toLocaleDateString("fr-FR")+" à "+bd.toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit"})+".";
-  }
-  root.appendChild(h("div", {class:"panel"},
-    h("div", {class:"footnote", style:"margin:0 0 12px;"}, lastBackupTxt),
-    h("button", {class:"sheet-btn primary", onclick:function(){ runBackup(false); }}, "Sauvegarder maintenant"),
-    h("div", {class:"footnote"}, "Une sauvegarde complète de vos données (profil et vacations) est proposée automatiquement au téléchargement tous les 7 jours à l’ouverture de l’application, au format JSON — à conserver précieusement, par exemple en cas de changement d’appareil.")
-  ));
-
   root.appendChild(h("div", {class:"section-title"}, "Votre profil"));
+  /* Depuis le parcours d'accueil unifié « Acteur(rice) de section », la
+     fiche (nom, prénom, collège, téléphone, fonction en section) est déjà
+     créée en amont, dans l'annuaire de la section — plus besoin de la
+     ressaisir ni de pouvoir la modifier ici. Seule la mise en relation
+     avec cette fiche (openPickMyMemberSheet) reste une action possible ;
+     le reste s'affiche en lecture seule, tel que recopié automatiquement
+     depuis la fiche choisie (voir selectMember). */
+  var linkedMember = state.profile.memberId ? state.sectionMembers.filter(function(m){ return m.id===state.profile.memberId; })[0] : null;
   if(state.sectionMembers.length>0){
-    var linkedMember = state.profile.memberId ? state.sectionMembers.filter(function(m){ return m.id===state.profile.memberId; })[0] : null;
     root.appendChild(h("div", {class:"panel", style:"margin-bottom:10px"},
       h("div", {class:"footnote", style:"margin:0 0 8px"},
         linkedMember
           ? "Profil lié à la fiche « "+memberDisplayName(linkedMember)+" » de l'annuaire — vos statistiques et votre planning personnel reconnaissent vos audiences de façon fiable."
           : "Choisir votre fiche dans l'annuaire évite les faux négatifs dans « Mes statistiques » si votre nom y est orthographié un peu différemment."),
       h("button", {class:"sheet-btn ghost", onclick:function(){ openPickMyMemberSheet(); }},
-        linkedMember ? "Changer ma fiche liée" : "Me lier à ma fiche dans l'annuaire")
+        linkedMember ? "Changer mon identité" : "Me lier à ma fiche dans l'annuaire")
     ));
   }
-  var profileTelIn = h("input", {type:"tel", placeholder:"06 12 34 56 78", value:p.tel});
-  bindTelFormatting(profileTelIn, function(v){ p.tel=v; saveState(); });
-  root.appendChild(h("div", {class:"panel"},
-    h("label", {class:"field-label"}, "Prénom"),
-    h("input", {type:"text", value:p.prenom, oninput:function(e){ p.prenom=e.target.value; saveState(); }}),
-    h("label", {class:"field-label"}, "Nom"),
-    h("input", {type:"text", value:p.nom, oninput:function(e){ p.nom=e.target.value; saveState(); }}),
-    h("label", {class:"field-label"}, "Téléphone"),
-    profileTelIn,
-    h("div", {class:"footnote"}, "Si vous êtes président(e) de section, ce numéro est transmis avec le fichier « Partager avec la section » — il permet aux conseillers de vous notifier un échange d’audience par SMS."),
-    h("label", {class:"field-label", style:"margin-top:12px"}, "Collège"),
-    h("select", {onchange:function(e){ p.college=e.target.value; saveState(); }},
-      h("option", {value:""}, "— Non précisé —"),
-      COLLEGES.map(function(c){ return h("option", {value:c, selected: c===p.college?"selected":null}, c); })),
-    h("label", {class:"field-label"}, "Section"),
-    h("select", {onchange:function(e){ p.section=e.target.value; saveState(); }},
-      h("option", {value:""}, "— Non précisée —"),
-      SECTIONS.map(function(s){ return h("option", {value:s, selected: s===p.section?"selected":null}, s); })),
-    h("label", {class:"field-label"}, "CPH de"),
-    h("select", {onchange:function(e){
-      p.cph=e.target.value;
-      var preset = CPH_ADVANCED_PRESETS[p.cph];
-      if(preset){
-        p.annuaireUrl = preset.annuaireUrl;
-        p.cphWebUrl = preset.cphWebUrl;
-        p.vacationsEmail = preset.vacationsEmail;
-        p.presidentEmail = preset.presidentEmail;
-      }
-      saveState(); render("settings");
-    }},
-      h("option", {value:"", selected: p.cph?null:"selected"}, "— Sélectionner —"),
-      CPH_REGIONS.map(function(region){
-        return h("optgroup", {label:"Cour d’appel de "+region[0]},
-          region[1].map(function(ville){ return h("option", {value:ville, selected: ville===p.cph?"selected":null}, ville); }));
-      }),
-      h("option", {value:CPH_AUTRE, selected: p.cph===CPH_AUTRE?"selected":null}, "Autre / non listé")),
-    p.cph===CPH_AUTRE ? h("input", {type:"text", style:"margin-top:8px", placeholder:"Précisez le nom du CPH", value:p.cphAutre, oninput:function(e){ p.cphAutre=e.target.value; saveState(); }}) : null,
-    h("div", {class:"footnote"}, "Liste établie à partir de sources publiques ; en cas de fusion récente ou d’erreur, utilisez « Autre / non listé ».")
-  ));
-
-  root.appendChild(h("div", {class:"section-title"}, "Signature"));
-  root.appendChild(buildSignaturePanel(p));
+  var identityList = h("div", {class:"info-list"});
+  function identityRow(label, value){
+    identityList.appendChild(h("div", {class:"info-row"},
+      h("div", {class:"info-label"}, label),
+      h("div", {class:"info-value"}, value || "—")
+    ));
+  }
+  identityRow("Prénom", p.prenom);
+  identityRow("Nom", p.nom);
+  identityRow("Téléphone", p.tel);
+  identityRow("Collège", p.college);
+  identityRow("Section", p.section);
+  identityRow("CPH de", p.cph===CPH_AUTRE ? p.cphAutre : p.cph);
+  root.appendChild(h("div", {class:"panel"}, identityList));
 
   root.appendChild(h("div", {class:"section-title"}, "Activité salariée"));
   var workPanel = h("div", {class:"panel"});
@@ -7590,16 +8725,8 @@ renderers.settings = function(root){
   }
   root.appendChild(workPanel);
 
-  root.appendChild(h("div", {class:"section-title"}, "Fonctions au CPH"));
-  var fnPanel = h("div", {class:"panel"});
-  fnPanel.appendChild(h("div", null,
-    h("div", {class:"field-label"}, "Fonction en section"),
-    h("div", {style:"margin-top:4px; font-weight:600"}, sectionRoleLabel(p.sectionRole) || "Non définie"),
-    h("div", {class:"footnote", style:"margin-top:6px"}, "Déterminée par l'administrateur sur votre fiche de l'annuaire, et non modifiable ici — voir « Votre profil » ci-dessus pour changer la fiche liée.")
-  ));
-  fnPanel.appendChild(h("div", {style:"margin-top:14px"}, boolField("(vice)Président(e) CPH ?", p.presidentCph, function(v){ p.presidentCph=v; saveState(); render("settings"); })));
-  fnPanel.appendChild(h("div", {style:"margin-top:14px"}, boolField("Référiste ?", p.referiste, function(v){ p.referiste=v; saveState(); render("settings"); })));
-  root.appendChild(fnPanel);
+  root.appendChild(h("div", {class:"section-title"}, "Signature"));
+  root.appendChild(buildSignaturePanel(p));
 
   root.appendChild(h("div", {class:"section-title"}, "Apparence"));
   var themePanel = h("div", {class:"panel"});
@@ -7616,8 +8743,20 @@ renderers.settings = function(root){
   root.appendChild(themePanel);
 
   root.appendChild(h("div", {class:"section-title"}, "Vos données"));
-  root.appendChild(h("p", {class:"lede"}, "Tout est enregistré uniquement sur cet appareil, sans serveur. La sauvegarde de vos données se trouve en haut de cette page — vous pouvez ici restaurer une sauvegarde existante ou réinitialiser l’application."));
+  root.appendChild(h("p", {class:"lede"}, "Tout est enregistré uniquement sur cet appareil, sans serveur. Sauvegardez-les manuellement ci-dessous, restaurez une sauvegarde existante, ou réinitialisez l’application."));
   var dataPanel = h("div", {class:"panel"});
+  /* Bouton de sauvegarde déplacé ici depuis son ancienne section dédiée
+     « Sauvegarde », en tête de « Vos données » — à la demande de
+     l'utilisateur, pour regrouper toutes les actions sur les données au
+     même endroit. */
+  var lastBackupTxt = "Aucune sauvegarde effectuée pour l’instant.";
+  if(state.lastBackupAt){
+    var bd = new Date(state.lastBackupAt);
+    lastBackupTxt = "Dernière sauvegarde le "+bd.toLocaleDateString("fr-FR")+" à "+bd.toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit"})+".";
+  }
+  dataPanel.appendChild(h("div", {class:"footnote", style:"margin:0 0 12px;"}, lastBackupTxt));
+  dataPanel.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){ runBackup(false); }}, "Sauvegarder maintenant"));
+  dataPanel.appendChild(h("div", {class:"footnote", style:"margin-bottom:16px"}, "Une sauvegarde complète de vos données (profil et vacations) est proposée automatiquement au téléchargement tous les 7 jours à l’ouverture de l’application, au format JSON — à conserver précieusement, par exemple en cas de changement d’appareil."));
   var fileIn = h("input", {type:"file", accept:"application/json", style:"display:none", onchange:function(e){
     var file = e.target.files[0]; if(!file) return;
     var reader = new FileReader();
@@ -7653,85 +8792,25 @@ renderers.settings = function(root){
   root.appendChild(dataPanel);
 
   root.appendChild(h("div", {class:"section-title"}, "Synchronisation avec la section"));
+  /* Simplifiée à la demande de l'utilisateur : la fiche utilisateur et
+     l'espace de section sont désormais créés en amont (parcours d'accueil
+     unifié « Acteur(rice) de section »), donc plus besoin ici de créer un
+     espace, rejoindre avec un code, consulter le code de section, ou
+     désactiver la synchronisation — seule l'action de rafraîchir les
+     données reste utile au quotidien pour un(e) simple conseiller(e).
+     Exception nécessaire, identifiée en construisant cet écran et
+     confirmée avec l'utilisateur : président(e) et vice-président(e)
+     éditent leur répertoire et leur planning uniquement en local (voir
+     « Administrer ma section » → répertoire/planification, jamais
+     poussés automatiquement) — sans un moyen de les envoyer, leurs
+     modifications resteraient bloquées sur leur appareil pour toujours.
+     « Envoyer mes modifications » leur reste donc réservé ici. */
   var syncPanel = h("div", {class:"panel"});
-  if(!state.sync.sectionCode){
-    /* Seul le président initialise l'espace partagé de sa section — c'est
-       lui qui tient l'annuaire à jour (voir « Acteurs de ma section »).
-       Le vice-président et les conseillers rejoignent avec le code qu'il
-       leur transmet ; ils n'ont pas besoin — et ne devraient pas avoir
-       besoin — de pouvoir en créer un eux-mêmes. */
-    syncPanel.appendChild(h("p", {class:"lede", style:"margin:0 0 12px"},
-      state.profile.sectionRole==="president"
-        ? "Activez la synchronisation pour que l'annuaire des conseillers et le planning se tiennent à jour entre vous, le vice-président et les conseillers de la section, sans échange de fichier JSON. Les données personnelles (noms, emails, téléphones) sont chiffrées avant tout envoi — voir « Paramètres avancés » ci-dessous pour les détails."
-        : "Si le président de votre section a activé la synchronisation, saisissez ici le code qu'il vous a transmis pour recevoir automatiquement l'annuaire des conseillers et le planning, sans échange de fichier JSON."));
-    if(state.profile.sectionRole==="president"){
-      syncPanel.appendChild(h("button", {class:"sheet-btn accent", onclick:openCreateSectionSyncSheet}, "Créer un espace pour ma section"));
-    }
-    syncPanel.appendChild(h("button", {class:"sheet-btn "+(state.profile.sectionRole==="president" ? "ghost" : "accent"), style: state.profile.sectionRole==="president" ? "margin-top:8px" : "", onclick:function(){ openJoinSectionSyncSheet(); }}, "Rejoindre avec un code reçu"));
-  } else {
-    var syncInfo = h("div", {class:"info-list"});
-    syncInfo.appendChild(h("div", {class:"info-row"},
-      h("div", {class:"info-label"}, "Code de section"),
-      h("div", {class:"info-value", style:"font-family:monospace"}, state.sync.sectionCode)
-    ));
-    syncInfo.appendChild(h("div", {class:"info-row"},
-      h("div", {class:"info-label"}, "Dernière synchro"),
-      h("div", {class:"info-value"}, state.sync.lastSyncAt ? new Date(state.sync.lastSyncAt).toLocaleString("fr-FR") : "Jamais")
-    ));
-    syncPanel.appendChild(syncInfo);
-    syncPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:10px", onclick:function(){
-      copyText(state.sync.sectionCode);
-      toast("Code copié — partagez-le aux autres acteurs de la section.");
-    }}, "Copier le code à partager"));
-    syncPanel.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:confirmAndPullSection}, "Récupérer la dernière version"));
-    syncPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:pushToSectionNow}, "Envoyer ma version actuelle"));
-    syncPanel.appendChild(h("button", {class:"sheet-btn danger", style:"margin-top:8px", onclick:disableSectionSync}, "Désactiver la synchronisation"));
+  syncPanel.appendChild(h("button", {class:"sheet-btn accent", onclick:function(){ confirmAndPullSection(); }}, "Synchroniser les données"));
+  if(state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president"){
+    syncPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:pushToSectionNow}, "Envoyer mes modifications"));
   }
   root.appendChild(syncPanel);
-
-  root.appendChild(h("div", {class:"section-title"}, "Paramètres avancés"));
-  var advPanel = h("div", {class:"panel"});
-  advPanel.appendChild(h("label", {class:"field-label"}, "Lien http vers annuaire"));
-  advPanel.appendChild(h("input", {type:"url", placeholder:"https://…", value:p.annuaireUrl, oninput:function(e){ p.annuaireUrl=e.target.value; saveState(); }}));
-  advPanel.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Lien http vers site web CPH"));
-  advPanel.appendChild(h("input", {type:"url", placeholder:"https://…", value:p.cphWebUrl, oninput:function(e){ p.cphWebUrl=e.target.value; saveState(); }}));
-  advPanel.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Adresse email envoi vacations"));
-  advPanel.appendChild(h("input", {type:"email", placeholder:"nom@exemple.fr", value:p.vacationsEmail, oninput:function(e){ p.vacationsEmail=e.target.value; saveState(); }}));
-  advPanel.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Adresse mail président CPH"));
-  advPanel.appendChild(h("input", {type:"email", placeholder:"nom@exemple.fr", value:p.presidentEmail, oninput:function(e){ p.presidentEmail=e.target.value; saveState(); }}));
-  advPanel.appendChild(h("div", {class:"footnote", style:"margin-top:8px"}, "Se remplissent automatiquement pour certains CPH (ex. Béziers) lors de la sélection ci-dessus — modifiables librement. L’adresse email de vacations sert au bouton « Envoyer » du relevé RITA."));
-  advPanel.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Lien html vers Formation ENM"));
-  advPanel.appendChild(h("input", {type:"url", placeholder:"https://…", value:p.formationEnmUrl, oninput:function(e){ p.formationEnmUrl=e.target.value; saveState(); }}));
-  advPanel.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Lien html vers Legifrance"));
-  advPanel.appendChild(h("input", {type:"url", placeholder:"https://…", value:p.legifranceUrl, oninput:function(e){ p.legifranceUrl=e.target.value; saveState(); }}));
-  advPanel.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "Lien html vers ENSAP"));
-  advPanel.appendChild(h("input", {type:"url", placeholder:"https://…", value:p.ensapUrl, oninput:function(e){ p.ensapUrl=e.target.value; saveState(); }}));
-  advPanel.appendChild(h("div", {class:"footnote", style:"margin-top:8px"}, "Ces trois liens sont pré-remplis par défaut pour tous les CPH — modifiables librement."));
-  var remindersCheckbox = h("input", {type:"checkbox", checked: p.ritaReminders ? "checked" : null});
-  remindersCheckbox.addEventListener("change", function(e){
-    if(e.target.checked){
-      if(typeof Notification === "undefined"){
-        toast("Les notifications ne sont pas prises en charge sur cet appareil.");
-        e.target.checked = false;
-        return;
-      }
-      Notification.requestPermission().then(function(perm){
-        if(perm === "granted"){
-          p.ritaReminders = true; saveState(); render("settings");
-        } else {
-          toast("Autorisation refusée — le rappel ne pourra pas s’afficher en notification (le bandeau restera visible dans l’application).");
-          e.target.checked = false;
-          p.ritaReminders = false; saveState();
-        }
-      });
-    } else {
-      p.ritaReminders = false; saveState();
-    }
-  });
-  advPanel.appendChild(h("label", {class:"checkbox-row", style:"margin-top:14px"}, remindersCheckbox,
-    "Recevoir une notification si le relevé RITA du mois n’est pas encore envoyé après le 25"));
-  advPanel.appendChild(h("div", {class:"footnote", style:"margin-top:6px"}, "Un rappel s’affiche de toute façon dans l’application dès le 25 du mois si l’envoi n’est pas fait — cette option ajoute en plus une notification système, qui ne peut se déclencher que si l’application est ouverte (ou revient en avant-plan) à ce moment-là."));
-  root.appendChild(advPanel);
 
   root.appendChild(h("div", {class:"section-title"}, "Espace administrateur"));
   var sysAdminPanel = h("div", {class:"panel"});
