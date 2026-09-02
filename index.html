@@ -1,3 +1,4 @@
+<!doctype html><html lang="fr"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mon Assistant CPH</title>
@@ -450,7 +451,7 @@
   .search-wrap svg{ position:absolute; left:12px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--text-faint); }
   .month-nav-label svg{ width:14px; height:14px; color:var(--text-muted); flex:none; }
   .search-wrap input{ padding-left:34px; }
-</style>
+</style></head><body>
 
 <!-- ===================== ICONS (sprite) ===================== -->
 <svg width="0" height="0" style="position:absolute">
@@ -1554,18 +1555,21 @@ function decryptCphDirectoryEntry(cphDirectoryCode, envelope){
     });
   });
 }
-/* Ce qu'on publie pour une section donnée : uniquement de quoi identifier
-   quelqu'un (nom, prénom, collège) — délibérément SANS téléphone ni email,
-   contrairement à l'ancienne page externe vers laquelle pointait le
-   bouton « Annuaire ». Un conseiller qui veut contacter quelqu'un d'une
-   autre section passe par sa fiche complète une fois la section
-   concernée identifiée (voir échange avec l'utilisateur sur le choix des
-   champs affichés). */
+/* Champs publiés dans l'annuaire partagé du CPH : prénom/nom/collège
+   depuis l'origine (choix délibérément conservateur au lancement de
+   cette fonctionnalité, l'utilisateur n'ayant alors exprimé aucune
+   préférence particulière), PLUS tél/email depuis une demande explicite
+   ultérieure (« les fiches individuelles ne sont pas cliquables,
+   l'utilisateur ne peut donc pas voir les mails et tel ») — voir
+   openAnnuaireCphMemberDetail pour la fiche de détail correspondante.
+   Reste chiffré de bout en bout comme le reste (clé dérivée du code
+   annuaire du CPH) : ni plus ni moins protégé que prénom/nom/collège
+   déjà publiés depuis le début. */
 function cphDirectoryEntryFromMembers(sectionName, members){
   return {
     section: sectionName,
     members: (members||[]).map(function(m){
-      return { prenom:m.prenom||"", nom:m.nom||"", college:m.college||"" };
+      return { prenom:m.prenom||"", nom:m.nom||"", college:m.college||"", tel:m.tel||"", email:m.email||"" };
     })
   };
 }
@@ -4029,7 +4033,7 @@ function loadAnnuaireCph(force){
       decryptCphDirectoryEntry(code, sections[k]).then(function(payload){
         var sectionName = (payload && payload.section) || k;
         ((payload && payload.members) || []).forEach(function(m){
-          entries.push({ prenom:m.prenom||"", nom:m.nom||"", college:m.college||"", section:sectionName });
+          entries.push({ prenom:m.prenom||"", nom:m.nom||"", college:m.college||"", section:sectionName, tel:m.tel||"", email:m.email||"" });
         });
       }).catch(function(){ /* entrée illisible (ancien code, section corrompue…) : ignorée plutôt que de bloquer les autres */ })
         .then(function(){
@@ -4045,6 +4049,30 @@ function loadAnnuaireCph(force){
     annuaireCphState.status = "error";
     render("annuaire-cph");
   });
+}
+/* Fiche de détail, en LECTURE SEULE (aucun champ éditable, aucune
+   action) — voir demande explicite de l'utilisateur : « les fiches
+   individuelles ne sont pas cliquables, l'utilisateur ne peut donc pas
+   voir les mails et tel ». Même schéma d'affichage (info-list/info-row,
+   liens tél:/mailto: cliquables) que la fiche d'un conseiller de sa
+   propre section (voir openSectionMemberView) ou les fiches contact de
+   « Paramètres de la section », pour rester cohérent avec le reste de
+   l'application plutôt que d'inventer une présentation différente ici. */
+function openAnnuaireCphMemberDetail(m){
+  var info = h("div", {class:"info-list"});
+  function infoRow(label, value, href){
+    info.appendChild(h("div", {class:"info-row"},
+      h("div", {class:"info-label"}, label),
+      value && href
+        ? h("a", {href:href, class:"info-value"}, value)
+        : h("div", {class:"info-value"}, value || "—")
+    ));
+  }
+  infoRow("Section", m.section);
+  infoRow("Collège", m.college);
+  infoRow("Email", m.email, m.email ? "mailto:"+m.email : null);
+  infoRow("Téléphone", m.tel ? formatTelFR(m.tel) : "", m.tel ? "tel:"+m.tel.replace(/\D/g,"") : null);
+  openSheet(memberDisplayName(m) || "Conseiller", info);
 }
 renderers["annuaire-cph"] = function(root){
   if(!state.sync.sectionCode){
@@ -4094,7 +4122,9 @@ renderers["annuaire-cph"] = function(root){
     list.appendChild(h("div", {class:"footnote"}, entries.length ? "Aucun conseiller pour ce filtre." : "Aucun conseiller publié pour l'instant."));
   } else {
     filtered.forEach(function(m){
-      list.appendChild(h("div", {class:"row-click"},
+      list.appendChild(h("div", {class:"row-click", tabindex:"0",
+          onclick:function(){ openAnnuaireCphMemberDetail(m); },
+          onkeydown:function(e){ if(e.key==="Enter") openAnnuaireCphMemberDetail(m); }},
         h("div", {class:"rc-main"},
           h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
           h("div", {class:"rc-sub"}, [m.section, m.college].filter(Boolean).join(" — ") || "—")
@@ -9218,3 +9248,5 @@ render(navStack[navStack.length-1]);
 
   window.dispatchEvent(new Event("fb-sync-ready"));
 </script>
+
+</html>
