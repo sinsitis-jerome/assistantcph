@@ -1,0 +1,167 @@
+rules_version = '2';
+
+/* =====================================================================
+   RÈGLES DE SÉCURITÉ — synchronisation par section (CPH Toolbox)
+   ---------------------------------------------------------------------
+   Modèle retenu (voir échange avec l'utilisateur) : un seul "code de
+   section", jeton aléatoire de 128 bits, sert à la fois d'identifiant du
+   document Firestore et de matière première pour la clé de chiffrement
+   côté client (AES-GCM, via Web Crypto). Aucune authentification Firebase
+   n'est utilisée — pas de compte, pas de mot de passe à gérer — et aucune
+   Cloud Function n'est nécessaire, ce qui permet de rester sur l'offre
+   gratuite "Spark" (pas de carte bancaire à renseigner).
+
+   Le contenu personnel (annuaire des conseillers, planning) est TOUJOURS
+   chiffré avant d'arriver ici : Firestore ne stocke jamais de données en
+   clair, seulement une enveloppe chiffrée (iv + ciphertext) et quelques
+   métadonnées non sensibles (nom du CPH, nom de la section, horodatage).
+
+   Sécurité du modèle :
+   - "get" (lire UN document dont on connaît déjà l'ID exact) est
+     autorisé à tout le monde — mais "list" (lister/parcourir toute la
+     collection "sections" pour en découvrir l'existence) est BLOQUÉ.
+     Sans le code exact, un document est donc introuvable : le code agit
+     comme une clé de capacité, à la manière d'un lien "quiconque a le
+     lien peut consulter/modifier".
+   - Quiconque connaît le code peut donc aussi bien lire qu'écrire :
+     l'application elle-même restreint les écrans de modification au
+     président et au vice-président selon le rôle choisi localement,
+     mais Firestore ne fait pas cette distinction — c'est un choix
+     assumé pour rester sans carte bancaire (voir échange avec
+     l'utilisateur : une séparation lecture/écriture véritablement
+     garantie côté serveur demanderait une Cloud Function).
+   - Un garde-fou de taille (500 Ko) limite les abus/erreurs, bien au
+     dessus de ce qu'une section peut réellement produire.
+   ===================================================================== */
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /sections/{sectionCode} {
+
+      allow get: if true;
+      allow list: if false;
+
+      allow create, update: if request.resource.data.keys().hasAll(
+                                  ['cph', 'section', 'schemaVersion', 'updatedAt', 'iv', 'ciphertext']
+                                )
+                              && request.resource.data.cph is string
+                              && request.resource.data.cph.size() < 200
+                              && request.resource.data.section is string
+                              && request.resource.data.section.size() < 200
+                              && request.resource.data.schemaVersion is int
+                              && request.resource.data.iv is string
+                              && request.resource.data.iv.size() < 100
+                              && request.resource.data.ciphertext is string
+                              && request.resource.data.ciphertext.size() < 500000;
+
+      allow delete: if false;
+    }
+
+    /* -------------------------------------------------------------------
+       ESPACE ADMINISTRATEUR (rôle "Administrateur", accès à n'importe
+       quelle section) — voir le module ADMINISTRATION GÉNÉRALE dans
+       index.html pour le détail du modèle de sécurité. Deux collections
+       supplémentaires, toutes deux "get" libre / "list" bloqué comme
+       "sections" ci-dessus, pour la même raison : leurs identifiants sont
+       déterministes (donc devinables) mais leur CONTENU utile reste
+       inaccessible sans connaître le code administrateur à 8 chiffres —
+       jamais stocké ici, seule son empreinte SHA-256 l'est.
+       ------------------------------------------------------------------- */
+
+    /* Un seul document (admin/config) : l'empreinte du code administrateur
+       en vigueur. Sans authentification serveur, quiconque connaît déjà
+       l'emplacement de ce document pourrait théoriquement le réécrire —
+       exactement le même compromis assumé que pour "sections" ci-dessus,
+       pour rester sur l'offre gratuite Firebase sans Cloud Function. */
+    match /admin/config {
+
+      allow get: if true;
+      allow list: if false;
+
+      allow create, update: if request.resource.data.keys().hasAll(['codeHash', 'updatedAt'])
+                              && request.resource.data.codeHash is string
+                              && request.resource.data.codeHash.size() == 64;
+
+      allow delete: if false;
+    }
+
+    /* Un document par couple (CPH, section) déjà "indexé" depuis l'espace
+       administrateur : associe cet identifiant déterministe au code de LA
+       section, chiffré (AES-GCM) avec une clé dérivée du code
+       administrateur — jamais en clair. */
+    match /registry/{registryId} {
+
+      allow get: if true;
+      allow list: if false;
+
+      allow create, update: if request.resource.data.keys().hasAll(
+                                  ['cph', 'section', 'iv', 'ciphertext', 'updatedAt']
+                                )
+                              && request.resource.data.cph is string
+                              && request.resource.data.cph.size() < 200
+                              && request.resource.data.section is string
+                              && request.resource.data.section.size() < 200
+                              && request.resource.data.iv is string
+                              && request.resource.data.iv.size() < 100
+                              && request.resource.data.ciphertext is string
+                              && request.resource.data.ciphertext.size() < 500;
+
+      allow delete: if false;
+    }
+
+    /* Codes personnels (4 chiffres) des conseillers d'une section, connus
+       de l'administrateur, retrouvables sans devoir les régénérer à
+       chaque session (demande explicite de l'utilisateur — voir Codes
+       personnels retrouvables sans régénération dans index.html). Même
+       identifiant déterministe (CPH+section) que "registry" ci-dessus,
+       dans une collection séparée : chiffré avec une clé dérivée du code
+       ADMINISTRATEUR — jamais du code de section. C'est ce choix qui
+       diffère de "sections" plus haut : connaître le seul code de section
+       ne permet PAS de déchiffrer ce document, pour ne jamais affaiblir la
+       protection contre l'usurpation d'identité que ces codes personnels
+       offrent aux conseillers eux-mêmes. Une limite de taille plus large
+       que "registry" (un seul code) : ce document porte les codes de
+       potentiellement tous les conseillers d'une section. */
+    match /adminPins/{registryId} {
+
+      allow get: if true;
+      allow list: if false;
+
+      allow create, update: if request.resource.data.keys().hasAll(
+                                  ['iv', 'ciphertext', 'updatedAt']
+                                )
+                              && request.resource.data.iv is string
+                              && request.resource.data.iv.size() < 100
+                              && request.resource.data.ciphertext is string
+                              && request.resource.data.ciphertext.size() < 200000;
+
+      allow delete: if false;
+    }
+
+    /* Annuaire partagé du CPH (toutes sections confondues) — voir ANNUAIRE
+       PARTAGÉ DU CPH dans index.html. Un seul document par CPH,
+       identifiant déterministe (donc devinable, comme "registry" et
+       "adminPins" ci-dessus) mais son contenu reste chiffré (AES-GCM) avec
+       une clé dérivée du "code annuaire du CPH" — un secret distinct du
+       code de chaque section, connu de tout conseiller déjà synchronisé
+       d'une section où l'administrateur l'a activé. Le champ "sections"
+       est écrit avec l'option merge côté client (setDoc(..., {merge:true})) :
+       chaque section met à jour SA SEULE entrée sans jamais pouvoir
+       écraser celles des autres, ce qui permet à chaque synchronisation
+       normale d'une section de maintenir l'annuaire à jour toute seule. */
+    match /cphDirectory/{cphId} {
+
+      allow get: if true;
+      allow list: if false;
+
+      allow create, update: if request.resource.data.keys().hasAll(['cph', 'sections'])
+                              && request.resource.data.cph is string
+                              && request.resource.data.cph.size() < 200
+                              && request.resource.data.sections is map
+                              && request.resource.data.sections.size() < 20;
+
+      allow delete: if false;
+    }
+  }
+}

@@ -1,4 +1,3 @@
-<!doctype html><html lang="fr"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mon Assistant CPH</title>
@@ -451,7 +450,7 @@
   .search-wrap svg{ position:absolute; left:12px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--text-faint); }
   .month-nav-label svg{ width:14px; height:14px; color:var(--text-muted); flex:none; }
   .search-wrap input{ padding-left:34px; }
-</style></head><body>
+</style>
 
 <!-- ===================== ICONS (sprite) ===================== -->
 <svg width="0" height="0" style="position:absolute">
@@ -1012,7 +1011,20 @@ function isProfileComplete(p){
   if(!p.prenom.trim() || !p.nom.trim() || !p.tel.trim() || !p.college || !p.section || !p.cph) return false;
   if(p.cph===CPH_AUTRE && !p.cphAutre.trim()) return false;
   if(p.remunere===null) return false;
-  if(p.sectionRole===null || p.presidentCph===null || p.referiste===null) return false;
+  if(p.sectionRole===null) return false;
+  /* presidentCph/referiste ne sont plus exigés ici : ce sont deux
+     informations annexes (la première n'affiche qu'une carte "Administrer
+     le CPH" en plus sur l'accueil, la seconde ne pilote plus rien du tout)
+     que le bouton "Terminer" du parcours d'accueil unifié force de toute
+     façon à false si elles sont restées à null — jamais un choix que
+     l'utilisateur fait réellement dans ce parcours. Les exiger ici pouvait
+     bloquer indéfiniment sur l'écran "Veuillez initialiser l'application"
+     un profil par ailleurs entièrement renseigné (nom, tél, collège,
+     section, CPH, activité salariée, fonction en section) dès lors que ces
+     deux champs n'avaient, pour une raison ou une autre, jamais été
+     explicitement mis à jour depuis le null par défaut — voir migrate(),
+     qui les normalise désormais systématiquement en booléen au
+     chargement, en complément de ce relâchement. */
   return true;
 }
 function todayISO(){ var d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -1062,6 +1074,12 @@ var DEFAULT_STATE = {
     greffier:{prenom:"", nom:"", email:"", tel:""},
     coPresident:{prenom:"", nom:"", email:"", tel:""}
   },
+  /* Voir defaultSectionSettings() (déclarée plus bas, mais les
+     déclarations de fonction sont hoistées : disponible dès ici) : liens
+     utiles, horaires par défaut et fiches de contact de la section,
+     désormais configurés depuis l'espace administrateur et synchronisés
+     (jamais modifiables ici localement). */
+  sectionSettings: defaultSectionSettings(),
   planning:[],
   /* Vestige de l'ancien parcours guidé « Outil de planification » (partage
      JSON entre président et vice-président, envoi au greffe, diffusion à
@@ -1105,7 +1123,18 @@ var DEFAULT_STATE = {
      synchronisé sur cet appareil (ou sauvegarde antérieure à ce champ) :
      traité comme "peut-être local et non envoyé", donc prudent par
      défaut, jusqu'à la prochaine synchronisation réussie. */
-  sync:{ sectionCode:"", lastSyncAt:null, lastSyncedSnapshot:null },
+  /* revoked:true = cet appareil a été retiré de sa section (fiche
+     supprimée de l'annuaire par le président, le vice-président ou
+     l'administrateur — voir applySyncPayloadToState, qui détecte ce cas
+     à chaque récupération en constatant que profile.memberId n'existe
+     plus dans l'annuaire fraîchement reçu). Verrouillage CÔTÉ APPLICATION
+     UNIQUEMENT (voir échange avec l'utilisateur, qui a explicitement
+     choisi cette option plutôt qu'une vraie rotation du code de section) :
+     l'app cesse de lire/écrire quoi que ce soit et affiche un écran de
+     blocage (voir render()), mais Firestore lui-même ne fait toujours
+     aucune distinction d'identité — voir Modèle d'accès dans
+     firestore.rules. */
+  sync:{ sectionCode:"", lastSyncAt:null, lastSyncedSnapshot:null, revoked:false },
   /* Codes personnels (4 chiffres) en clair pour les fiches créées ou
      régénérées SUR CET APPAREIL — voir le module CODE PERSONNEL PAR
      CONSEILLER : jamais synchronisé (syncPayloadFromState ne transmet que
@@ -1149,8 +1178,16 @@ function migrate(parsed){
       } else {
         s.profile.sectionRole = null;
       }
-      s.profile.presidentCph = p.presidentCph===true ? true : (p.presidentCph===false ? false : null);
-      s.profile.referiste = p.referiste===true ? true : (p.referiste===false ? false : null);
+      /* Normalisés en booléen (jamais null) dès la relecture depuis le
+         stockage local : un profil enregistré avant l'ajout de l'étape
+         "Terminer" qui les met à jour (ou qui, pour toute autre raison,
+         ne l'a jamais déclenchée) se retrouve ainsi avec des valeurs
+         par défaut sûres (false) plutôt que null — voir isProfileComplete,
+         dont ces deux champs ne conditionnent plus l'accès à l'accueil,
+         précisément pour ne plus jamais bloquer un profil déjà complet
+         par ailleurs sur ce détail. */
+      s.profile.presidentCph = p.presidentCph===true;
+      s.profile.referiste = p.referiste===true;
       s.profile.annuaireUrl = typeof p.annuaireUrl==="string" ? p.annuaireUrl : "";
       s.profile.cphWebUrl = typeof p.cphWebUrl==="string" ? p.cphWebUrl : "";
       s.profile.vacationsEmail = typeof p.vacationsEmail==="string" ? p.vacationsEmail : "";
@@ -1311,7 +1348,12 @@ function migrate(parsed){
       s.sync.sectionCode = typeof parsed.sync.sectionCode==="string" ? parsed.sync.sectionCode : "";
       s.sync.lastSyncAt = typeof parsed.sync.lastSyncAt==="string" ? parsed.sync.lastSyncAt : null;
       s.sync.lastSyncedSnapshot = typeof parsed.sync.lastSyncedSnapshot==="string" ? parsed.sync.lastSyncedSnapshot : null;
+      s.sync.revoked = parsed.sync.revoked===true;
     }
+    /* Voir defaultSectionSettings()/sanitizeSectionSettings() : reconstruit
+       systématiquement la forme complète, jamais modifiée localement par un
+       appareil de conseiller — seule une synchronisation la met à jour. */
+    s.sectionSettings = sanitizeSectionSettings(parsed.sectionSettings);
     if(parsed.localMemberPins && typeof parsed.localMemberPins==="object"){
       Object.keys(parsed.localMemberPins).forEach(function(k){
         if(typeof parsed.localMemberPins[k]==="string" && /^\d{4}$/.test(parsed.localMemberPins[k])) s.localMemberPins[k] = parsed.localMemberPins[k];
@@ -1445,15 +1487,236 @@ function decryptSyncPayload(sectionCode, envelope){
   });
 }
 
-/* Ce que la synchronisation transmet : l'annuaire des conseillers et le
-   planning de la section. Les autres données (vacations personnelles,
-   réglages propres à l'appareil, etc.) restent strictement locales. */
-function syncPayloadFromState(){
-  return { sectionMembers: state.sectionMembers, planning: state.planning };
+/* --- ANNUAIRE PARTAGÉ DU CPH (toutes sections confondues) ---
+   Demande de l'utilisateur : le bouton « Annuaire » de l'accueil doit
+   afficher, en lecture seule, TOUS les conseillers du même CPH (pas
+   seulement ceux de sa propre section), filtrable par section et par
+   collège. Techniquement, un conseiller de la section Commerce ne peut
+   pas déchiffrer les données de la section Industrie : chaque section
+   n'est lisible qu'avec son propre code, exactement comme pour l'espace
+   administrateur (voir plus haut). Impossible donc de simplement
+   réutiliser le code de section.
+
+   Solution retenue avec l'utilisateur : un second secret, le « code
+   annuaire du CPH », généré une seule fois par l'administrateur et commun
+   à TOUTES les sections d'un même CPH (contrairement au code de section,
+   propre à chacune). Il voyage à l'intérieur du champ sectionSettings
+   déjà chiffré de chaque section (cphDirectoryCode ci-dessus) : tout
+   conseiller déjà synchronisé le reçoit donc automatiquement à sa
+   prochaine synchronisation normale, sans jamais avoir à le saisir.
+
+   Publication : chaque section, en poussant ses propres modifications
+   (pushToSectionNow côté président/vice-président, pushAdminBuffer côté
+   administrateur — voir les deux endroits qui appellent
+   publishCphDirectoryEntry plus bas), publie AUSSI sa propre contribution
+   dans un document Firestore partagé par CPH (cphDirectory/{cphId}, un
+   champ par section), chiffrée avec la clé dérivée de ce code. Le champ
+   "sections" étant écrit avec l'option merge de Firestore, chaque section
+   met à jour SA SEULE entrée sans jamais toucher aux autres — la liste
+   reste donc à jour automatiquement au fil des synchronisations
+   normales, sans geste de "publication" récurrent à la charge de
+   l'administrateur (voir échange avec l'utilisateur : « ne pourrait-on
+   pas simplifier la publication ? »). Seule la mise en place initiale
+   (génération du code + propagation aux sections déjà existantes) reste
+   un geste explicite, ponctuel — voir activateCphDirectory() plus bas. */
+var CPH_DIRECTORY_HKDF_INFO = "cph-toolbox-cph-directory-v1";
+
+function cphDirectoryIdFor(cph){ return slugifyForRegistry(cph); }
+
+function deriveCphDirectoryKey(cphDirectoryCode){
+  var codeBytes = syncBase64UrlToBytes(cphDirectoryCode);
+  return crypto.subtle.importKey("raw", codeBytes, "HKDF", false, ["deriveKey"]).then(function(ikm){
+    return crypto.subtle.deriveKey(
+      { name:"HKDF", hash:"SHA-256", salt:new Uint8Array(0), info:new TextEncoder().encode(CPH_DIRECTORY_HKDF_INFO) },
+      ikm,
+      { name:"AES-GCM", length:256 },
+      false,
+      ["encrypt","decrypt"]
+    );
+  });
 }
+function encryptCphDirectoryEntry(cphDirectoryCode, entryObj){
+  return deriveCphDirectoryKey(cphDirectoryCode).then(function(key){
+    var iv = new Uint8Array(12);
+    crypto.getRandomValues(iv);
+    var plaintext = new TextEncoder().encode(JSON.stringify(entryObj));
+    return crypto.subtle.encrypt({name:"AES-GCM", iv:iv}, key, plaintext).then(function(cipherBuf){
+      return { iv: syncBytesToBase64Url(iv), ciphertext: syncBytesToBase64Url(new Uint8Array(cipherBuf)) };
+    });
+  });
+}
+function decryptCphDirectoryEntry(cphDirectoryCode, envelope){
+  return deriveCphDirectoryKey(cphDirectoryCode).then(function(key){
+    var iv = syncBase64UrlToBytes(envelope.iv);
+    var cipherBytes = syncBase64UrlToBytes(envelope.ciphertext);
+    return crypto.subtle.decrypt({name:"AES-GCM", iv:iv}, key, cipherBytes).then(function(plainBuf){
+      return JSON.parse(new TextDecoder().decode(plainBuf));
+    });
+  });
+}
+/* Ce qu'on publie pour une section donnée : uniquement de quoi identifier
+   quelqu'un (nom, prénom, collège) — délibérément SANS téléphone ni email,
+   contrairement à l'ancienne page externe vers laquelle pointait le
+   bouton « Annuaire ». Un conseiller qui veut contacter quelqu'un d'une
+   autre section passe par sa fiche complète une fois la section
+   concernée identifiée (voir échange avec l'utilisateur sur le choix des
+   champs affichés). */
+function cphDirectoryEntryFromMembers(sectionName, members){
+  return {
+    section: sectionName,
+    members: (members||[]).map(function(m){
+      return { prenom:m.prenom||"", nom:m.nom||"", college:m.college||"" };
+    })
+  };
+}
+/* Best-effort et silencieux en cas d'échec (hors ligne, code annuaire pas
+   encore configuré pour ce CPH, pont Firebase pas encore chargé...) :
+   l'annuaire partagé du CPH est un service en plus, jamais une condition
+   de réussite de l'envoi normal de la section qui l'accompagne. */
+function publishCphDirectoryEntry(cph, sectionName, cphDirectoryCode, members){
+  if(!cphDirectoryCode || !syncAvailable() || !window.__fbFirestore.setCphDirectorySectionEntry) return Promise.resolve();
+  try{
+    return encryptCphDirectoryEntry(cphDirectoryCode, cphDirectoryEntryFromMembers(sectionName, members)).then(function(envelope){
+      return window.__fbFirestore.setCphDirectorySectionEntry(cphDirectoryIdFor(cph), slugifyForRegistry(sectionName), {
+        cph: cph||"", iv: envelope.iv, ciphertext: envelope.ciphertext
+      });
+    }).catch(function(){ /* best-effort, voir ci-dessus */ });
+  }catch(e){ return Promise.resolve(); }
+}
+
+/* Paramètres de la section (module ADMINISTRATION GÉNÉRALE — écran
+   « Paramètres de la section ») : liens utiles, horaires par défaut des
+   audiences et fiches de contact, désormais une vraie donnée DE LA
+   SECTION plutôt que propre à chaque appareil — éditée exclusivement
+   depuis l'espace administrateur (voir renderers["sysadmin-section-settings"]),
+   synchronisée comme l'annuaire et le planning, et affichée en lecture
+   seule à tous les conseillers de la section (voir sectionLink() et
+   renderers["liens-utiles"]). Un appareil qui n'a encore rien reçu de ce
+   type (section pas encore configurée par l'administrateur, ou
+   synchronisation jamais activée) garde une valeur vide ici — voir
+   sectionLink(), qui retombe alors sur l'ancien réglage local par
+   appareil, pour ne rien casser pendant la transition. */
+function defaultSectionSettings(){
+  return {
+    links: { cphWebUrl:"", annuaireUrl:"", formationEnmUrl:"", legifranceUrl:"", ensapUrl:"" },
+    defaultTimes: {
+      bj: { debut:"", fin:"" },
+      bco: { debut:"", fin:"" },
+      "bco-mee": { debut:"", fin:"" }
+    },
+    contacts: {
+      greffier: { prenom:"", nom:"", email:"", tel:"" },
+      presidentCph: { prenom:"", nom:"", email:"", tel:"" },
+      presidentTj: { prenom:"", nom:"", email:"", tel:"" },
+      presidentCourAppel: { prenom:"", nom:"", email:"", tel:"" },
+      batonnier: { prenom:"", nom:"", email:"", tel:"" },
+      directeurGreffe: { prenom:"", nom:"", email:"", tel:"" }
+    },
+    /* Code secret partagé par TOUT le CPH (pas seulement cette section),
+       généré une fois par l'administrateur — voir ANNUAIRE PARTAGÉ DU CPH
+       plus bas. Voyage à l'intérieur de ce même champ sectionSettings déjà
+       chiffré : tout conseiller déjà synchronisé le reçoit donc
+       automatiquement à sa prochaine synchronisation normale, sans jamais
+       avoir à le saisir lui-même. Vide tant que l'administrateur n'a pas
+       activé cette fonctionnalité pour le CPH. */
+    cphDirectoryCode: ""
+  };
+}
+/* Normalisation défensive (même esprit que migrate()) : reconstruit
+   toujours la forme complète ci-dessus, quelle que soit la fraîcheur ou
+   la complétude de ce qui vient d'être reçu (section jamais configurée,
+   ancien schéma, document partiellement corrompu…), sans jamais lever
+   d'exception ni laisser un champ à `undefined`. */
+function sanitizeSectionSettings(raw){
+  var out = defaultSectionSettings();
+  if(!raw || typeof raw!=="object") return out;
+  if(raw.links && typeof raw.links==="object"){
+    Object.keys(out.links).forEach(function(k){
+      if(typeof raw.links[k]==="string") out.links[k] = raw.links[k];
+    });
+  }
+  if(raw.defaultTimes && typeof raw.defaultTimes==="object"){
+    var timeRe = /^([01]\d|2[0-3]):(00|30)$/;
+    Object.keys(out.defaultTimes).forEach(function(typeId){
+      var t = raw.defaultTimes[typeId];
+      if(t && typeof t==="object"){
+        out.defaultTimes[typeId].debut = (typeof t.debut==="string" && timeRe.test(t.debut)) ? t.debut : "";
+        out.defaultTimes[typeId].fin = (typeof t.fin==="string" && timeRe.test(t.fin)) ? t.fin : "";
+      }
+    });
+  }
+  if(raw.contacts && typeof raw.contacts==="object"){
+    Object.keys(out.contacts).forEach(function(k){
+      var c = raw.contacts[k];
+      if(c && typeof c==="object"){
+        out.contacts[k] = {
+          prenom: typeof c.prenom==="string" ? c.prenom : "",
+          nom: typeof c.nom==="string" ? c.nom : "",
+          email: typeof c.email==="string" ? c.email : "",
+          tel: typeof c.tel==="string" ? c.tel : ""
+        };
+      }
+    });
+  }
+  if(typeof raw.cphDirectoryCode==="string") out.cphDirectoryCode = raw.cphDirectoryCode;
+  return out;
+}
+/* Ce que la synchronisation transmet : l'annuaire des conseillers, le
+   planning et les paramètres de section. Les autres données (vacations
+   personnelles, réglages propres à l'appareil, etc.) restent strictement
+   locales. sectionSettings n'est en pratique jamais modifié localement
+   par un appareil de conseiller (lecture seule, voir plus haut) : le
+   reporter tel quel dans son propre envoi (« Envoyer mes modifications »,
+   côté président/vice-président) ne fait donc que réémettre la dernière
+   valeur reçue, sans jamais risquer d'écraser une modification de
+   l'administrateur avec une copie appauvrie — un envoi ne pouvant de toute
+   façon contenir qu'un instantané complet du document (voir
+   pushSectionSyncPayload, aucune fusion champ-par-champ possible sur un
+   contenu chiffré en bloc). */
+function syncPayloadFromState(){
+  return { sectionMembers: state.sectionMembers, planning: state.planning, sectionSettings: state.sectionSettings };
+}
+/* Détection du retrait d'accès (voir échange avec l'utilisateur : « lorsqu'un
+   utilisateur est supprimé... il ne faut plus qu'il puisse accéder à la
+   base de donnée ni interagir avec elle »). Se déclenche ici, au point de
+   passage UNIQUE par lequel toute donnée fraîchement récupérée entre dans
+   `state` (chargement automatique au lancement comme récupération manuelle
+   depuis Réglages) : si cet appareil est lié à une fiche précise
+   (profile.memberId, posé par openPickMyMemberSheet) et que cette fiche
+   n'existe plus du tout dans l'annuaire qui vient d'être reçu, c'est
+   qu'elle a été supprimée — par le président, le vice-président ou
+   l'administrateur, les trois seuls capables de modifier l'annuaire puis
+   de le synchroniser. On bascule alors sur un blocage définitif plutôt que
+   d'appliquer les données reçues : ni l'annuaire, ni le planning, ni les
+   réglages de section fraîchement récupérés ne sont jamais écrits dans
+   `state` (donc jamais persistés sur cet appareil), et tout ce qui y était
+   déjà en cache est effacé. Voir render() pour l'écran de blocage, et le
+   commentaire sur state.sync.revoked (DEFAULT_STATE) pour la limite
+   assumée de ce verrouillage (côté application seulement). */
 function applySyncPayloadToState(payload){
-  state.sectionMembers = (payload && Array.isArray(payload.sectionMembers)) ? payload.sectionMembers : [];
+  var incomingMembers = (payload && Array.isArray(payload.sectionMembers)) ? payload.sectionMembers : [];
+  var myId = state.profile.memberId;
+  var stillListed = !myId || incomingMembers.some(function(m){ return m.id===myId; });
+  if(!stillListed){
+    state.sync.revoked = true;
+    state.sectionMembers = [];
+    state.planning = [];
+    state.sectionSettings = defaultSectionSettings();
+    state.myPlanning = clone(DEFAULT_STATE.myPlanning);
+    return;
+  }
+  state.sectionMembers = incomingMembers;
   state.planning = (payload && Array.isArray(payload.planning)) ? payload.planning : [];
+  state.sectionSettings = sanitizeSectionSettings(payload && payload.sectionSettings);
+}
+/* Valeur effective d'un lien utile : priorité à la donnée de section
+   (configurée par l'administrateur, identique pour tous), repli sur
+   l'ancien réglage local à cet appareil (préréglages par CPH ou saisie
+   d'avant cette fonctionnalité) tant que la section n'a pas encore été
+   configurée ou n'a jamais été synchronisée — voir defaultSectionSettings
+   ci-dessus. */
+function sectionLink(key){
+  return (state.sectionSettings && state.sectionSettings.links && state.sectionSettings.links[key]) || state.profile[key] || "";
 }
 
 function syncAvailable(){ return !!(window.__fbFirestore); }
@@ -1619,6 +1882,7 @@ function notifyMyPlanningChanges(before, after){
 
 function maybeAutoPullSection(){
   if(autoPullAttempted) return;
+  if(state.sync.revoked) return; // voir applySyncPayloadToState — accès retiré, plus aucun appel réseau
   if(!state.sync.sectionCode || !syncAvailable()) return;
   autoPullAttempted = true;
   var localSnapshot = JSON.stringify(syncPayloadFromState());
@@ -1630,6 +1894,16 @@ function maybeAutoPullSection(){
     if(remoteSnapshot===localSnapshot) return; // déjà à jour, rien à faire
     var myBefore = myInvolvedPlanningSnapshot(state.planning);
     applySyncPayloadToState(result.payload);
+    if(state.sync.revoked){
+      /* Accès retiré (voir applySyncPayloadToState) : on saute la
+         notification "planning a changé" (plus rien à en dire — c'est
+         l'accès lui-même qui vient d'être retiré, pas juste une audience)
+         et on force l'écran de blocage immédiatement, quel que soit
+         l'écran affiché au moment où ce chargement se termine. */
+      saveState();
+      render("home");
+      return;
+    }
     markSyncDone();
     notifyMyPlanningChanges(myBefore, myInvolvedPlanningSnapshot(state.planning));
     var current = navStack[navStack.length-1];
@@ -2080,7 +2354,7 @@ function openAdminIndexSectionSheet(cph, section){
 }
 
 function openAdminSection(cph, section, sectionCode){
-  adminBuffer = {cph:cph, section:section, sectionCode:sectionCode, sectionMembers:[], planning:[], loaded:false};
+  adminBuffer = {cph:cph, section:section, sectionCode:sectionCode, sectionMembers:[], planning:[], sectionSettings:defaultSectionSettings(), loaded:false};
   /* adminMemberPins n'est volontairement PAS remis à zéro ici : ouvrir une
      section fraîchement créée (openAdminSectionCreatedSheet -> "Continuer")
      appelle aussi cette fonction, et le code du président généré à
@@ -2100,6 +2374,7 @@ function refreshAdminBuffer(){
     if(result){
       adminBuffer.sectionMembers = (result.payload && result.payload.sectionMembers) || [];
       adminBuffer.planning = (result.payload && result.payload.planning) || [];
+      adminBuffer.sectionSettings = sanitizeSectionSettings(result.payload && result.payload.sectionSettings);
     }
     adminBuffer.loaded = true;
     render("sysadmin-section");
@@ -2112,7 +2387,7 @@ function refreshAdminBuffer(){
 function pushAdminBuffer(){
   if(!adminBuffer) return Promise.reject(new Error("no-admin-buffer"));
   return pushSectionSyncPayload(adminBuffer.sectionCode, adminBuffer.cph, adminBuffer.section, {
-    sectionMembers: adminBuffer.sectionMembers, planning: adminBuffer.planning
+    sectionMembers: adminBuffer.sectionMembers, planning: adminBuffer.planning, sectionSettings: adminBuffer.sectionSettings
   });
 }
 
@@ -2242,7 +2517,7 @@ function openAdminMemberForm(existing){
         adminBuffer.sectionMembers.push(entry);
       }
       closeSheet();
-      render("sysadmin-section");
+      render("sysadmin-section-members");
     }
     if(isEdit){
       commit();
@@ -2277,7 +2552,7 @@ function openAdminMemberForm(existing){
     actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
       adminBuffer.sectionMembers = adminBuffer.sectionMembers.filter(function(m){ return m.id!==draft.id; });
       closeSheet();
-      render("sysadmin-section");
+      render("sysadmin-section-members");
       toast("Conseiller supprimé — pensez à « Enregistrer et synchroniser ».");
     }}, "Supprimer ce conseiller"));
   }
@@ -2402,6 +2677,7 @@ function openJoinSectionSyncSheet(onJoined, opts){
    revenir une fois la récupération faite — voir renderers["mon-planning"],
    qui réutilise ce même geste explicite plutôt que d'en dupliquer un. */
 function confirmAndPullSection(returnScreen){
+  if(state.sync.revoked) return; // écran de blocage géré par render() — ne devrait jamais être atteignable ici
   if(!syncAvailable()){ toast("Synchronisation indisponible pour le moment (vérifiez votre connexion)."); return; }
   openSheet("Récupérer la dernière version", h("div", null,
     h("p", {class:"lede"}, "L'annuaire des conseillers et le planning enregistrés sur cet appareil vont être remplacés par la dernière version partagée. Si des modifications locales n'ont pas encore été envoyées, elles seront perdues."),
@@ -2410,6 +2686,11 @@ function confirmAndPullSection(returnScreen){
         closeSheet();
         if(!result){ toast("Aucune donnée trouvée pour ce code."); return; }
         applySyncPayloadToState(result.payload);
+        if(state.sync.revoked){
+          saveState();
+          render("home"); // voir applySyncPayloadToState — render() affiche l'écran de blocage quel que soit l'argument
+          return;
+        }
         markSyncDone();
         toast("Données récupérées.");
         render(returnScreen || "settings");
@@ -2422,6 +2703,7 @@ function confirmAndPullSection(returnScreen){
 }
 
 function pushToSectionNow(){
+  if(state.sync.revoked) return; // écran de blocage géré par render() — ne devrait jamais être atteignable ici
   if(!syncAvailable()){ toast("Synchronisation indisponible pour le moment (vérifiez votre connexion)."); return; }
   var cph = cphLabel(state.profile) || state.profile.cph || "";
   var section = state.profile.section || "";
@@ -2429,6 +2711,9 @@ function pushToSectionNow(){
     markSyncDone();
     toast("Données envoyées — les autres acteurs les recevront à leur prochaine récupération.");
     render("settings");
+    if(state.sectionSettings.cphDirectoryCode){
+      publishCphDirectoryEntry(cph, section, state.sectionSettings.cphDirectoryCode, state.sectionMembers);
+    }
   }).catch(function(err){
     toast("Échec de l'envoi — vérifiez votre connexion.");
   });
@@ -2865,10 +3150,12 @@ var SCREEN_TITLES = {
   home:"Mon Assistant CPH", onboarding:"Bienvenue", vacations:"Feuille de vacation", bj:"Présider un BJ",
   bco:"Présider un BCO", refs:"Textes de référence", phrases:"Phrases rituelles", settings:"Réglages",
   "admin-section":"Administrer ma section", "admin-cph":"Administrer le CPH", stats:"Statistiques",
-  "liens-utiles":"Liens utiles", "section-membres":"Acteurs de ma section",
+  "liens-utiles":"Liens utiles", "annuaire-cph":"Annuaire", "section-membres":"Acteurs de ma section",
   "planification":"Outil de planification", "mon-planning":"Mon planning",
   "prise-fonction":"Prise de fonction",
   "sysadmin-panel":"Espace administrateur", "sysadmin-section":"Section administrée",
+  "sysadmin-section-members":"Liste de la section", "sysadmin-section-planning":"Planning de la section",
+  "sysadmin-section-settings":"Paramètres de la section",
   "onboarding-activite":"Bienvenue", "onboarding-signature":"Bienvenue"
 };
 /* Écrans du parcours d'accueil : ni bouton retour ni icône Réglages tant
@@ -2887,7 +3174,43 @@ function go(screenId, replace){
 function goBack(){
   if(navStack.length>1){ navStack.pop(); render(navStack[navStack.length-1]); }
 }
+/* Écran de blocage (voir state.sync.revoked, applySyncPayloadToState) :
+   volontairement affiché ici, au point de passage UNIQUE par lequel
+   passe absolument tout affichage d'écran, plutôt que comme un
+   renderers[...] normal — pour qu'AUCUN écran (y compris Réglages,
+   l'annuaire du CPH, etc.) ne reste accessible une fois l'accès retiré,
+   quel que soit le `go()`/`render()` demandé par ailleurs. Seule sortie
+   possible : réinitialiser complètement cet appareil (même geste que
+   « Réinitialiser toutes les données » en Réglages, inaccessible ici). */
+function renderRevokedLock(){
+  document.getElementById("tb-title").textContent = "Accès révoqué";
+  document.getElementById("btn-back").style.display = "none";
+  document.getElementById("btn-settings").style.display = "none";
+  var main = document.getElementById("main");
+  clear(main);
+  var screen = h("div", {class:"screen active", id:"screen-revoked-lock"});
+  var wrap = h("div", {class:"init-empty"},
+    h("p", null, "Votre accès à cette section a été retiré par le président, le vice-président ou l’administrateur du CPH."),
+    h("p", {class:"footnote", style:"margin-top:8px"}, "Vous ne pouvez plus consulter ni modifier les données de cette section depuis cette application. Si vous pensez qu’il s’agit d’une erreur, contactez le président de votre section ou l’administrateur de l’application."),
+    h("button", {class:"sheet-btn danger", style:"margin-top:18px", onclick:function(){
+      openSheet("Réinitialiser l’application", h("div", null,
+        h("p", {class:"lede"}, "Toutes les données enregistrées sur cet appareil (profil, vacations, progression) seront définitivement supprimées. Utile si vous devez rejoindre une nouvelle section avec un nouveau code."),
+        h("button", {class:"sheet-btn danger", onclick:function(){
+          state = clone(DEFAULT_STATE); saveState(); applyTheme(); closeSheet(); toast("Données réinitialisées.");
+          window.__cph.state = state;
+          navStack = ["onboarding"];
+          render("onboarding");
+        }}, "Tout réinitialiser"),
+        h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+      ));
+    }}, "Réinitialiser l’application")
+  );
+  main.appendChild(screen);
+  screen.appendChild(wrap);
+  main.scrollTop = 0;
+}
 function render(screenId){
+  if(state.sync.revoked){ renderRevokedLock(); return; }
   document.getElementById("tb-title").textContent = SCREEN_TITLES[screenId] || "";
   document.getElementById("btn-back").style.display = (screenId==="home"||ONBOARDING_SCREENS.indexOf(screenId)!==-1) ? "none" : "flex";
   /* Pendant tout le parcours d'accueil (y compris l'activité salariée et la
@@ -3193,14 +3516,40 @@ renderers["sysadmin-panel"] = function(root){
   root.appendChild(secPanel);
 };
 
-renderers["sysadmin-section"] = function(root){
+/* Garde commune aux quatre écrans de la section administrée (landing +
+   les trois sous-écrans) : session expirée ou aucune section choisie —
+   ramène vers l'espace administrateur plutôt que d'afficher un écran
+   cassé. Retourne `false` (et a déjà rempli `root`) si l'appelant doit
+   s'arrêter là. */
+function requireAdminBuffer(root){
   if(!adminSessionCode || !adminBuffer){
     root.appendChild(h("div", {class:"init-empty"},
       h("p", null, "Aucune section sélectionnée."),
       h("button", {class:"btn", style:"margin-top:14px", onclick:function(){ go("sysadmin-panel", true); }}, "Retour")
     ));
-    return;
+    return false;
   }
+  return true;
+}
+/* Rappel affiché en bas des trois sous-écrans (liste / planning /
+   paramètres) : contrairement à state (appareil de l'utilisateur),
+   adminBuffer n'est jamais envoyé automatiquement — un aller-retour vers
+   l'écran précédent est nécessaire pour retrouver « Enregistrer et
+   synchroniser ». */
+function adminSectionSaveReminder(){
+  return h("div", {class:"footnote", style:"margin-top:16px"}, "Vos modifications restent en attente ici tant qu'elles ne sont pas envoyées — revenez à l'écran précédent puis touchez « Enregistrer et synchroniser ».");
+}
+
+/* Écran d'atterrissage d'une section administrée : trois cartes (demande
+   explicite de l'utilisateur, plutôt que la longue page unique
+   précédente qui empilait annuaire, planning puis paramètres) — voir
+   échange avec l'utilisateur : « Je voudrai repenser un peu la vue
+   administrateur pour avoir trois écrans au choix ». Les actions globales
+   (envoyer/recharger/changer de section) restent ici, puisqu'elles
+   portent sur adminBuffer dans son ensemble, pas sur un seul des trois
+   écrans. */
+renderers["sysadmin-section"] = function(root){
+  if(!requireAdminBuffer(root)) return;
 
   var wrap = h("div", {class:"home-wrap"});
   wrap.appendChild(h("div", {class:"hero"},
@@ -3223,7 +3572,59 @@ renderers["sysadmin-section"] = function(root){
   codePanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ copyText(adminBuffer.sectionCode); }}, "Copier le code à transmettre"));
   root.appendChild(codePanel);
 
-  root.appendChild(h("div", {class:"section-title"}, "Annuaire ("+adminBuffer.sectionMembers.length+")"));
+  root.appendChild(h("div", {class:"section-title"}, "Cette section"));
+  var cardsPanel = h("div", {class:"panel"});
+  function sectionCard(icon_id, title, sub, screenId){
+    return h("div", {class:"row-click", tabindex:"0", onclick:function(){ go(screenId); },
+        onkeydown:function(e){ if(e.key==="Enter") go(screenId); }},
+      h("div", {class:"ic"}, icon(icon_id)),
+      h("div", {class:"rc-main"},
+        h("div", {class:"rc-title"}, title),
+        h("div", {class:"rc-sub"}, sub)
+      ),
+      icon("ic-chev", "chev")
+    );
+  }
+  cardsPanel.appendChild(sectionCard("ic-users", "Liste de la section", adminBuffer.sectionMembers.length ? (adminBuffer.sectionMembers.length+(adminBuffer.sectionMembers.length>1 ? " conseillers enregistrés" : " conseiller enregistré")) : "Aucun conseiller enregistré", "sysadmin-section-members"));
+  cardsPanel.appendChild(sectionCard("ic-calendar", "Planning de la section", adminBuffer.planning.length ? (adminBuffer.planning.length+(adminBuffer.planning.length>1 ? " dates enregistrées" : " date enregistrée")) : "Aucune date enregistrée", "sysadmin-section-planning"));
+  cardsPanel.appendChild(sectionCard("ic-gear", "Paramètres de la section", "Liens utiles, horaires par défaut, contacts", "sysadmin-section-settings"));
+  root.appendChild(cardsPanel);
+
+  var actions = h("div", {style:"margin-top:20px; display:flex; flex-direction:column; gap:8px"});
+  var saveBtn;
+  actions.appendChild(saveBtn = h("button", {class:"sheet-btn accent", onclick:function(){
+    saveBtn.disabled = true;
+    pushAdminBuffer().then(function(){
+      saveBtn.disabled = false;
+      toast("Modifications envoyées à la section.");
+      if(adminBuffer.sectionSettings.cphDirectoryCode){
+        publishCphDirectoryEntry(adminBuffer.cph, adminBuffer.section, adminBuffer.sectionSettings.cphDirectoryCode, adminBuffer.sectionMembers);
+      }
+    }).catch(function(){
+      saveBtn.disabled = false;
+      toast("Envoi impossible pour le moment (connexion ?).");
+    });
+  }}, "Enregistrer et synchroniser"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){
+    adminBuffer.loaded = false; render("sysadmin-section"); refreshAdminBuffer();
+  }}, "Recharger depuis la section (annule les modifications non envoyées)"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){
+    adminBuffer = null; go("sysadmin-panel", true);
+  }}, "Changer de section"));
+  root.appendChild(actions);
+};
+
+/* Écran séparé « Liste de la section » (ex-bloc « Annuaire » de l'ancien
+   écran unique ci-dessus, inchangé sur le fond). */
+renderers["sysadmin-section-members"] = function(root){
+  if(!requireAdminBuffer(root)) return;
+  if(!adminBuffer.loaded){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des données de la section…")));
+    return;
+  }
+
+  root.appendChild(h("p", {class:"lede"}, adminBuffer.section+" — "+adminBuffer.cph+" ("+adminBuffer.sectionMembers.length+(adminBuffer.sectionMembers.length>1 ? " conseillers" : " conseiller")+")"));
+
   var list = h("div", {class:"panel"});
   if(!adminBuffer.sectionMembers.length){
     list.appendChild(h("div", {class:"footnote"}, "Aucun conseiller enregistré."));
@@ -3256,7 +3657,20 @@ renderers["sysadmin-section"] = function(root){
     onclick:function(){ adminMembersImportInput.click(); }
   }, icon("ic-upload")));
 
-  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Planning ("+adminBuffer.planning.length+")"));
+  root.appendChild(adminSectionSaveReminder());
+};
+
+/* Écran séparé « Planning de la section » (ex-bloc « Planning » de
+   l'ancien écran unique, inchangé sur le fond). */
+renderers["sysadmin-section-planning"] = function(root){
+  if(!requireAdminBuffer(root)) return;
+  if(!adminBuffer.loaded){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des données de la section…")));
+    return;
+  }
+
+  root.appendChild(h("p", {class:"lede"}, adminBuffer.section+" — "+adminBuffer.cph+" ("+adminBuffer.planning.length+(adminBuffer.planning.length>1 ? " dates" : " date")+")"));
+
   var planPanel = h("div", {class:"panel"});
   if(!adminBuffer.planning.length){
     planPanel.appendChild(h("div", {class:"footnote"}, "Aucune date enregistrée."));
@@ -3307,25 +3721,390 @@ renderers["sysadmin-section"] = function(root){
   }, icon("ic-upload")));
   root.appendChild(h("div", {class:"footnote", style:"margin-top:10px"}, "Ajout, modification et suppression d'une date, à la main ou par import JSON — le classement des rôles proposés reprend le même principe (nombre d'audiences déjà tenues) que sur les appareils de la section elle-même."));
 
-  var actions = h("div", {style:"margin-top:20px; display:flex; flex-direction:column; gap:8px"});
-  var saveBtn;
-  actions.appendChild(saveBtn = h("button", {class:"sheet-btn accent", onclick:function(){
-    saveBtn.disabled = true;
-    pushAdminBuffer().then(function(){
-      saveBtn.disabled = false;
-      toast("Modifications envoyées à la section.");
+  root.appendChild(adminSectionSaveReminder());
+};
+
+/* Écran séparé « Paramètres de la section » (nouveau) — voir
+   defaultSectionSettings()/sanitizeSectionSettings() pour la forme des
+   données, et openAdminSectionContactForm/openCrossSectionMemberPicker
+   plus bas pour l'édition des fiches de contact. Regroupe ce qui vivait
+   autrefois dans les Réglages de chaque appareil (liens utiles) et
+   n'était nulle part ailleurs éditable (demande explicite de
+   l'utilisateur : « tous les paramètres anciennement dans paramètres
+   désormais non modifiables par les utilisateurs »), plus de nouveaux
+   champs de section (horaires par défaut, contacts institutionnels). */
+var SECTION_SETTINGS_LINKS = [
+  {key:"cphWebUrl", label:"Site web du CPH"},
+  {key:"annuaireUrl", label:"Annuaire du CPH"},
+  {key:"formationEnmUrl", label:"Formation ENM"},
+  {key:"legifranceUrl", label:"Légifrance"},
+  {key:"ensapUrl", label:"ENSAP / Bulletins de paie"}
+];
+var SECTION_SETTINGS_CONTACTS = [
+  {key:"greffier", label:"Greffier de section"},
+  {key:"presidentCph", label:"Président(e) du CPH", pickable:true},
+  {key:"presidentTj", label:"Président(e) du Tribunal judiciaire"},
+  {key:"presidentCourAppel", label:"Président(e) de la Cour d'appel"},
+  {key:"batonnier", label:"Bâtonnier / Bâtonnière"},
+  {key:"directeurGreffe", label:"Directeur / Directrice de greffe"}
+];
+function contactFicheSummary(c){
+  var name = [c.prenom, c.nom].filter(Boolean).join(" ");
+  return [name, c.tel ? formatTelFR(c.tel) : "", c.email].filter(Boolean).join(" — ") || "Non renseigné";
+}
+
+/* Mise en place initiale de l'annuaire partagé du CPH (voir ANNUAIRE
+   PARTAGÉ DU CPH plus haut) : génère le code s'il n'existe pas encore
+   (ré-utilisé tel quel sinon — un simple republication), puis le propage
+   dans le sectionSettings de TOUTES LES AUTRES sections déjà indexées du
+   même CPH (celle actuellement ouverte dans l'espace administrateur sera
+   couverte par le prochain « Enregistrer et synchroniser » normal de cet
+   écran, pour ne jamais écraser une modification en cours sur cette
+   section-ci avec une version fraîchement re-téléchargée). Publie aussi,
+   au passage, la contribution de chaque section touchée — un geste
+   ponctuel qui « amorce » l'annuaire ; au-delà, chaque synchronisation
+   normale d'une section (voir pushToSectionNow / le bouton "Enregistrer
+   et synchroniser" ci-dessus) le maintient à jour toute seule. */
+function activateCphDirectory(){
+  if(!adminBuffer) return;
+  var isNew = !adminBuffer.sectionSettings.cphDirectoryCode;
+  if(isNew) adminBuffer.sectionSettings.cphDirectoryCode = generateSectionCode();
+  var code = adminBuffer.sectionSettings.cphDirectoryCode;
+  var cph = adminBuffer.cph;
+  var others = SECTIONS.filter(function(s){ return s!==adminBuffer.section; });
+  var okCount = 0, missCount = 0;
+  var pending = others.length;
+  function finish(){
+    render("sysadmin-section-settings");
+    var msg = (isNew ? "Code annuaire du CPH généré. " : "Annuaire du CPH republié. ")
+      + (okCount ? okCount+(okCount>1?" autres sections mises à jour":" autre section mise à jour")+(missCount ? ", "+missCount+(missCount>1?" pas encore créées.":" pas encore créée.") : ".") : (missCount ? "Aucune autre section indexée pour l'instant." : "Aucune autre section dans ce CPH."))
+      + " N'oubliez pas « Enregistrer et synchroniser » pour publier aussi cette section-ci.";
+    toast(msg);
+  }
+  if(!others.length){ finish(); return; }
+  others.forEach(function(sectionName){
+    lookupAdminRegistry(adminSessionCode, cph, sectionName).then(function(sectionCode){
+      if(!sectionCode){ missCount++; if(--pending===0) finish(); return; }
+      pullSectionSync(sectionCode).then(function(result){
+        var payload = (result && result.payload) || {};
+        var members = Array.isArray(payload.sectionMembers) ? payload.sectionMembers : [];
+        var planning = Array.isArray(payload.planning) ? payload.planning : [];
+        var settings = sanitizeSectionSettings(payload.sectionSettings);
+        settings.cphDirectoryCode = code;
+        return pushSectionSyncPayload(sectionCode, cph, sectionName, {
+          sectionMembers: members, planning: planning, sectionSettings: settings
+        }).then(function(){
+          return publishCphDirectoryEntry(cph, sectionName, code, members);
+        });
+      }).then(function(){
+        okCount++; if(--pending===0) finish();
+      }).catch(function(){
+        missCount++; if(--pending===0) finish();
+      });
     }).catch(function(){
-      saveBtn.disabled = false;
-      toast("Envoi impossible pour le moment (connexion ?).");
+      missCount++; if(--pending===0) finish();
     });
-  }}, "Enregistrer et synchroniser"));
-  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){
-    adminBuffer.loaded = false; render("sysadmin-section"); refreshAdminBuffer();
-  }}, "Recharger depuis la section (annule les modifications non envoyées)"));
-  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){
-    adminBuffer = null; go("sysadmin-panel", true);
-  }}, "Changer de section"));
-  root.appendChild(actions);
+  });
+}
+
+renderers["sysadmin-section-settings"] = function(root){
+  if(!requireAdminBuffer(root)) return;
+  if(!adminBuffer.loaded){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des données de la section…")));
+    return;
+  }
+  var s = adminBuffer.sectionSettings;
+
+  root.appendChild(h("p", {class:"lede"}, "Ces informations sont communes à toute la section : chaque conseiller les retrouve automatiquement (lecture seule) sur son propre appareil, dans « Liens utiles »."));
+
+  root.appendChild(h("div", {class:"section-title"}, "Liens utiles"));
+  var linksPanel = h("div", {class:"panel"});
+  SECTION_SETTINGS_LINKS.forEach(function(l){
+    linksPanel.appendChild(h("label", {class:"field-label"}, l.label));
+    var urlIn = h("input", {type:"url", inputmode:"url", autocapitalize:"none", autocomplete:"off", value:s.links[l.key], placeholder:"https://…",
+      onchange:function(e){ s.links[l.key] = e.target.value.trim(); }});
+    linksPanel.appendChild(urlIn);
+  });
+  root.appendChild(linksPanel);
+
+  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Horaires par défaut des audiences"));
+  var timesPanel = h("div", {class:"panel"});
+  PLANNING_TYPES.forEach(function(t){
+    var row = h("div", {style:"margin-bottom:14px"});
+    row.appendChild(h("label", {class:"field-label"}, t.label));
+    var timeRow = h("div", {style:"display:flex; gap:8px; align-items:center;"});
+    var debutSel = h("select", {onchange:function(e){ s.defaultTimes[t.id].debut = e.target.value; }},
+      h("option", {value:"", selected: s.defaultTimes[t.id].debut?null:"selected"}, "—"),
+      TIME_OPTIONS.map(function(tm){ return h("option", {value:tm[0], selected: tm[0]===s.defaultTimes[t.id].debut?"selected":null}, tm[1]); }));
+    var finSel = h("select", {onchange:function(e){ s.defaultTimes[t.id].fin = e.target.value; }},
+      h("option", {value:"", selected: s.defaultTimes[t.id].fin?null:"selected"}, "—"),
+      TIME_OPTIONS.map(function(tm){ return h("option", {value:tm[0], selected: tm[0]===s.defaultTimes[t.id].fin?"selected":null}, tm[1]); }));
+    timeRow.appendChild(debutSel);
+    timeRow.appendChild(h("span", {style:"opacity:.6"}, "—"));
+    timeRow.appendChild(finSel);
+    row.appendChild(timeRow);
+    timesPanel.appendChild(row);
+  });
+  root.appendChild(timesPanel);
+
+  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Contacts"));
+  var contactsPanel = h("div", {class:"panel"});
+  SECTION_SETTINGS_CONTACTS.forEach(function(c){
+    contactsPanel.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){ openAdminSectionContactForm(c.key, c.label, c.pickable); },
+        onkeydown:function(e){ if(e.key==="Enter") openAdminSectionContactForm(c.key, c.label, c.pickable); }},
+      h("div", {class:"rc-main"},
+        h("div", {class:"rc-title"}, c.label),
+        h("div", {class:"rc-sub"}, contactFicheSummary(s.contacts[c.key]))
+      ),
+      icon("ic-chev", "chev")
+    ));
+  });
+  root.appendChild(contactsPanel);
+
+  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Annuaire partagé du CPH"));
+  var dirPanel = h("div", {class:"panel"});
+  dirPanel.appendChild(h("p", {class:"lede", style:"margin-top:0"},
+    s.cphDirectoryCode
+      ? "Actif pour "+adminBuffer.cph+" — chaque conseiller synchronisé de n'importe quelle section retrouve automatiquement, dans son bouton « Annuaire », la liste de tous les conseillers du CPH (nom, prénom, collège, section), en lecture seule."
+      : "Permet à tout conseiller synchronisé, quelle que soit sa section, de consulter depuis son bouton « Annuaire » la liste de tous les conseillers de "+adminBuffer.cph+" — nom, prénom, collège, section, filtrable. Pas encore activé pour ce CPH."
+  ));
+  dirPanel.appendChild(h("button", {class:"sheet-btn"+(s.cphDirectoryCode?" ghost":" accent"), onclick:function(){
+    activateCphDirectory();
+  }}, s.cphDirectoryCode ? "Republier l'annuaire du CPH" : "Activer l'annuaire du CPH"));
+  if(s.cphDirectoryCode){
+    dirPanel.appendChild(h("div", {class:"footnote", style:"margin-top:8px"}, "« Republier » est utile après l'ajout d'une nouvelle section au CPH, ou pour forcer une mise à jour immédiate — les synchronisations normales de chaque section la maintiennent de toute façon à jour automatiquement."));
+  }
+  root.appendChild(dirPanel);
+
+  root.appendChild(adminSectionSaveReminder());
+};
+
+/* Formulaire d'une fiche de contact de « Paramètres de la section »
+   (greffier, président du CPH, président du TJ, président de la Cour
+   d'appel, bâtonnier, directeur de greffe) — même formulaire simple que
+   openSectionRoleForm (Réglages, resté local et hors de portée de cet
+   écran), mais opérant sur adminBuffer.sectionSettings.contacts. Pour
+   « Président(e) du CPH » uniquement (pickable), un bouton supplémentaire
+   permet de pré-remplir la fiche en choisissant un conseiller déjà
+   inscrit — n'importe quelle section de ce CPH, comme demandé — plutôt
+   que de ressaisir son identité à la main (voir
+   openCrossSectionMemberPicker). */
+function openAdminSectionContactForm(key, label, pickable, prefill){
+  var draft = prefill || Object.assign({}, adminBuffer.sectionSettings.contacts[key]);
+
+  var form = h("div", null);
+  var prenomIn, nomIn, emailIn, telIn;
+
+  if(pickable){
+    form.appendChild(h("button", {class:"sheet-btn ghost", type:"button", style:"margin-bottom:14px", onclick:function(){
+      openCrossSectionMemberPicker(adminBuffer.cph, function(m){
+        openAdminSectionContactForm(key, label, pickable, {
+          prenom: m.prenom || "", nom: m.nom || "", email: m.email || "", tel: m.tel || ""
+        });
+      });
+    }}, "Choisir un conseiller déjà inscrit…"));
+  }
+
+  form.appendChild(h("label", {class:"field-label"}, "Prénom"));
+  form.appendChild(prenomIn = h("input", {type:"text", value:draft.prenom, autocapitalize:"words"}));
+  bindPrenomCasing(prenomIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Nom"));
+  form.appendChild(nomIn = h("input", {type:"text", value:draft.nom, autocapitalize:"words"}));
+  bindNomCasing(nomIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Email"));
+  form.appendChild(emailIn = h("input", {type:"email", value:draft.email, autocapitalize:"none", autocomplete:"email"}));
+
+  form.appendChild(h("label", {class:"field-label"}, "Téléphone"));
+  form.appendChild(telIn = h("input", {type:"tel", value:draft.tel, autocomplete:"tel"}));
+  bindTelFormatting(telIn);
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    adminBuffer.sectionSettings.contacts[key] = {
+      prenom: prenomIn.value.trim(), nom: nomIn.value.trim(),
+      email: emailIn.value.trim(), tel: telIn.value.trim()
+    };
+    closeSheet(); render("sysadmin-section-settings");
+    toast("Informations enregistrées ici — n'oubliez pas « Enregistrer et synchroniser ».");
+  }}, "Enregistrer"));
+  actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
+    adminBuffer.sectionSettings.contacts[key] = {prenom:"", nom:"", email:"", tel:""};
+    closeSheet(); render("sysadmin-section-settings");
+    toast("Informations effacées ici — n'oubliez pas « Enregistrer et synchroniser ».");
+  }}, "Effacer ces informations"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
+  form.appendChild(actions);
+
+  openSheet(label, form);
+}
+
+/* Choix d'un conseiller « toutes sections confondues » (même CPH) pour
+   préremplir la fiche « Président(e) du CPH » — cette personne n'a pas de
+   section qui lui soit propre, contrairement aux autres fiches de
+   contact. Il n'existe aucune vraie liste globale des sections côté
+   Firestore (voir plus haut : « list » toujours bloqué, seul un « get »
+   par identifiant exact est autorisé) — on s'appuie donc sur SECTIONS,
+   la liste fixe et déjà connue des cinq sections possibles d'un CPH, en
+   interrogeant le registre puis l'annuaire de chacune l'une après
+   l'autre. Quelques secondes selon la connexion : forcément plus lent
+   qu'un accès direct, mais reste un geste ponctuel (au moment de
+   désigner cette personne), jamais un chargement systématique. */
+function openCrossSectionMemberPicker(cph, onPick){
+  var body = h("div", null);
+  var status = h("p", {class:"lede"}, "Recherche des conseillers de "+cph+"…");
+  body.appendChild(status);
+  var listBox = h("div", {style:"margin-top:8px"});
+  body.appendChild(listBox);
+  openSheet("Choisir un conseiller", body);
+
+  var found = [];
+  var pending = SECTIONS.length;
+  function done(){
+    pending--;
+    if(pending>0) return;
+    if(!found.length){
+      status.textContent = "Aucun conseiller trouvé pour "+cph+" (sections pas encore indexées, ou hors connexion).";
+      return;
+    }
+    status.textContent = found.length+(found.length>1 ? " conseillers trouvés — touchez un nom pour préremplir la fiche." : " conseiller trouvé — touchez le nom pour préremplir la fiche.");
+    found.sort(function(a,b){ return memberSortCompare(a.member, b.member); }).forEach(function(entry){
+      listBox.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){
+          closeSheet();
+          onPick(entry.member);
+        }, onkeydown:function(e){ if(e.key==="Enter"){ closeSheet(); onPick(entry.member); } }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, memberDisplayName(entry.member) || "(Sans nom)"),
+          h("div", {class:"rc-sub"}, entry.section+(entry.member.sectionRole ? " — "+sectionRoleLabel(entry.member.sectionRole) : ""))
+        )
+      ));
+    });
+  }
+  SECTIONS.forEach(function(sectionName){
+    lookupAdminRegistry(adminSessionCode, cph, sectionName).then(function(sectionCode){
+      if(!sectionCode){ done(); return; }
+      pullSectionSync(sectionCode).then(function(result){
+        var members = (result && result.payload && result.payload.sectionMembers) || [];
+        members.forEach(function(m){ found.push({member:m, section:sectionName}); });
+        done();
+      }).catch(done);
+    }).catch(done);
+  });
+}
+
+/* =================================================================
+   ÉCRAN — ANNUAIRE DU CPH (bouton « Annuaire » de l'accueil)
+   ================================================================= */
+/* Demande de l'utilisateur : le bouton « Annuaire » (jusqu'ici un simple
+   lien externe, voir sectionLink("annuaireUrl")) doit afficher tous les
+   conseillers du même CPH, toutes sections confondues, en liste non
+   modifiable, avec deux filtres (section, collège) — voir ANNUAIRE
+   PARTAGÉ DU CPH plus haut pour le mécanisme de chiffrement. État tenu en
+   dehors du renderer (comme vacViewMonth ailleurs dans l'appli) pour
+   survivre aux ré-affichages successifs de l'écran : un premier accès
+   déclenche le chargement, les visites suivantes réutilisent le résultat
+   déjà en mémoire tant que l'utilisateur ne demande pas explicitement à
+   l'actualiser. */
+var annuaireCphState = { status:"idle", entries:null };
+var annuaireCphFilters = { section:"", college:"" };
+function loadAnnuaireCph(force){
+  if(annuaireCphState.status==="loading") return;
+  if(annuaireCphState.status==="loaded" && !force) return;
+  annuaireCphState.status = "loading";
+  var cph = cphLabel(state.profile) || state.profile.cph || "";
+  var code = state.sectionSettings.cphDirectoryCode;
+  if(!syncAvailable() || !code){ annuaireCphState.status = "error"; render("annuaire-cph"); return; }
+  window.__fbFirestore.getCphDirectoryDoc(cphDirectoryIdFor(cph)).then(function(doc){
+    var sections = (doc && doc.sections) || {};
+    var keys = Object.keys(sections);
+    if(!keys.length){
+      annuaireCphState.status = "loaded"; annuaireCphState.entries = [];
+      render("annuaire-cph");
+      return;
+    }
+    var entries = [];
+    var pending = keys.length;
+    keys.forEach(function(k){
+      decryptCphDirectoryEntry(code, sections[k]).then(function(payload){
+        var sectionName = (payload && payload.section) || k;
+        ((payload && payload.members) || []).forEach(function(m){
+          entries.push({ prenom:m.prenom||"", nom:m.nom||"", college:m.college||"", section:sectionName });
+        });
+      }).catch(function(){ /* entrée illisible (ancien code, section corrompue…) : ignorée plutôt que de bloquer les autres */ })
+        .then(function(){
+          pending--;
+          if(pending===0){
+            annuaireCphState.status = "loaded";
+            annuaireCphState.entries = entries;
+            render("annuaire-cph");
+          }
+        });
+    });
+  }).catch(function(){
+    annuaireCphState.status = "error";
+    render("annuaire-cph");
+  });
+}
+renderers["annuaire-cph"] = function(root){
+  if(!state.sync.sectionCode){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "L'annuaire du CPH nécessite la synchronisation de section — activez-la depuis Réglages.")));
+    return;
+  }
+  if(!state.sectionSettings.cphDirectoryCode){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "L'annuaire partagé du CPH n'est pas encore configuré — contactez l'administrateur de l'application.")));
+    return;
+  }
+  if(annuaireCphState.status==="idle") loadAnnuaireCph(false);
+  if(annuaireCphState.status==="idle" || annuaireCphState.status==="loading"){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement de l'annuaire du CPH…")));
+    return;
+  }
+  if(annuaireCphState.status==="error"){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Impossible de récupérer l'annuaire du CPH pour le moment (connexion ?).")));
+    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ loadAnnuaireCph(true); }}, "Réessayer"));
+    return;
+  }
+
+  var entries = annuaireCphState.entries || [];
+  var sectionsPresent = [];
+  entries.forEach(function(e){ if(e.section && sectionsPresent.indexOf(e.section)===-1) sectionsPresent.push(e.section); });
+  sectionsPresent.sort();
+
+  root.appendChild(h("p", {class:"lede"}, "Tous les conseillers de "+(cphLabel(state.profile)||state.profile.cph||"votre CPH")+", toutes sections confondues — liste en lecture seule."));
+
+  var filterRow = h("div", {class:"btn-row"});
+  filterRow.appendChild(h("select", {onchange:function(e){ annuaireCphFilters.section = e.target.value; render("annuaire-cph"); }},
+    h("option", {value:"", selected: annuaireCphFilters.section?null:"selected"}, "Toutes les sections"),
+    sectionsPresent.map(function(s){ return h("option", {value:s, selected: s===annuaireCphFilters.section?"selected":null}, s); })
+  ));
+  filterRow.appendChild(h("select", {onchange:function(e){ annuaireCphFilters.college = e.target.value; render("annuaire-cph"); }},
+    h("option", {value:"", selected: annuaireCphFilters.college?null:"selected"}, "Tous les collèges"),
+    COLLEGES.map(function(c){ return h("option", {value:c, selected: c===annuaireCphFilters.college?"selected":null}, c); })
+  ));
+  root.appendChild(filterRow);
+
+  var filtered = entries.filter(function(e){
+    return (!annuaireCphFilters.section || e.section===annuaireCphFilters.section)
+      && (!annuaireCphFilters.college || e.college===annuaireCphFilters.college);
+  }).sort(memberSortCompare);
+
+  var list = h("div", {class:"panel", style:"margin-top:12px"});
+  if(!filtered.length){
+    list.appendChild(h("div", {class:"footnote"}, entries.length ? "Aucun conseiller pour ce filtre." : "Aucun conseiller publié pour l'instant."));
+  } else {
+    filtered.forEach(function(m){
+      list.appendChild(h("div", {class:"row-click"},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
+          h("div", {class:"rc-sub"}, [m.section, m.college].filter(Boolean).join(" — ") || "—")
+        )
+      ));
+    });
+  }
+  root.appendChild(list);
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:10px"}, filtered.length+(filtered.length>1 ? " conseillers" : " conseiller")));
+  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:12px", onclick:function(){ loadAnnuaireCph(true); }}, "Actualiser"));
 };
 
 renderers.home = function(root){
@@ -3403,8 +4182,8 @@ renderers.home = function(root){
     );
   }
   var quickLinks = h("div", {class:"quick-links"},
-    state.profile.annuaireUrl ? quickLink("ic-users", "Annuaire", state.profile.annuaireUrl) : null,
-    state.profile.cphWebUrl ? quickLink("ic-globe", "Site web", state.profile.cphWebUrl) : null,
+    quickLinkAction("ic-users", "Annuaire", function(){ go("annuaire-cph"); }),
+    sectionLink("cphWebUrl") ? quickLink("ic-globe", "Site web", sectionLink("cphWebUrl")) : null,
     quickLinkAction("ic-calendar", "Mon planning", function(){ go("mon-planning"); }),
     /* Grisée temporairement à la demande de l'utilisateur : la moyenne
        d'audiences par conseiller affichée sur cet écran ne reflète pas
@@ -5312,7 +6091,7 @@ function openAdminMembersImportConfirm(list){
         if(result.newPins.length){
           openAdminImportPinsSheet(result.stats, result.newPins);
         } else {
-          render("sysadmin-section");
+          render("sysadmin-section-members");
           toast(result.stats.added+" conseiller(s) ajouté(s), "+result.stats.updated+" mis à jour.");
         }
       });
@@ -5337,7 +6116,7 @@ function openAdminImportPinsSheet(stats, newPins){
     h("button", {class:"sheet-btn ghost", style:"margin-top:12px", onclick:function(){
       copyText(newPins.map(function(np){ return (memberDisplayName(np.member) || "(Sans nom)")+" : "+np.pin; }).join("\n"));
     }}, "Copier tous les codes"),
-    h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:function(){ closeSheet(); render("sysadmin-section"); }}, "Continuer")
+    h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:function(){ closeSheet(); render("sysadmin-section-members"); }}, "Continuer")
   ));
 }
 function handleAdminMembersImportFile(file){
@@ -5472,7 +6251,7 @@ function openAdminPlanningImportResultSheet(stats){
     })));
     body.appendChild(h("p", {class:"footnote", style:"margin-top:8px"}, "Pensez à « Enregistrer et synchroniser » une fois l'import terminé."));
   }
-  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:12px", onclick:function(){ closeSheet(); render("sysadmin-section"); }}, "Continuer"));
+  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:12px", onclick:function(){ closeSheet(); render("sysadmin-section-planning"); }}, "Continuer"));
   openSheet("Import terminé", body);
 }
 function handleAdminPlanningImportFile(file){
@@ -6614,6 +7393,7 @@ function openExchangeTargetPicker(myEntry, meMember, candidateMember){
    depuis Réglages dès que possible, plutôt que de faire disparaître
    silencieusement le travail de négociation qui vient d'aboutir. */
 function performExchange(myEntry, meMember, candidateEntry, candidateMember){
+  if(state.sync.revoked) return; // écran de blocage géré par render() — ne devrait jamais être atteignable ici
   function swapIn(entry, oldId, newId){
     if(entry.president===oldId) entry.president = newId;
     entry.assesseurs = (entry.assesseurs||[]).map(function(id){ return id===oldId ? newId : id; });
@@ -6656,8 +7436,8 @@ function performExchange(myEntry, meMember, candidateEntry, candidateMember){
 function openSwapRequestInstructions(e){
   var body = h("div", null);
   body.appendChild(h("p", {class:"lede"}, "Contactez les autres conseillers de votre section et collège en utilisant l’annuaire."));
-  if(state.profile.annuaireUrl){
-    body.appendChild(h("a", {href:state.profile.annuaireUrl, target:"_blank", rel:"noopener", class:"sheet-btn ghost", style:"display:block; text-align:center; text-decoration:none; box-sizing:border-box; margin-bottom:8px;"}, "Ouvrir l’annuaire"));
+  if(sectionLink("annuaireUrl")){
+    body.appendChild(h("a", {href:sectionLink("annuaireUrl"), target:"_blank", rel:"noopener", class:"sheet-btn ghost", style:"display:block; text-align:center; text-decoration:none; box-sizing:border-box; margin-bottom:8px;"}, "Ouvrir l’annuaire"));
   }
   body.appendChild(h("p", {class:"lede"}, "Une fois que la personne vous a accepté l’échange (confirmation écrite obligatoire — mail ou SMS), cliquez ci-dessous :"));
   body.appendChild(h("button", {class:"sheet-btn accent", onclick:function(){ openSwapNotifyPicker(e); }}, "Notifier un échange"));
@@ -6715,6 +7495,63 @@ function openSwapNotifyPicker(e){
   body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler"));
 
   openSheet("Notifier un échange", body);
+}
+
+/* Deux actions demandées par l'utilisateur, disponibles pour TOUT
+   conseiller (pas seulement président/vice-président) directement depuis
+   son propre planning personnel — réutilisent telles quelles les
+   mécaniques déjà en place ailleurs plutôt que d'en dupliquer une
+   version : l'export JPEG déjà utilisé pour la fiche d'un conseiller
+   depuis « Acteurs de ma section » (openMemberPlanningExportSheet,
+   choix Un mois / Une année entière déjà intégré), et la demande
+   d'échange déjà proposée audience par audience depuis le détail d'une
+   entrée de « Mon planning » (openExchangeRequest / openSwapRequestInstructions,
+   voir openMyPlanningEntryDetail plus haut — même bascule synchronisé/non
+   synchronisé reprise ici à l'identique). */
+function openMyPlanningPrintSheet(){
+  if(!state.sync.sectionCode){
+    toast("L’impression du planning nécessite la synchronisation de section — activez-la depuis Réglages.");
+    return;
+  }
+  if(!state.profile.memberId){
+    toast("Pour imprimer votre planning, votre profil doit d’abord être lié à votre fiche dans l’annuaire de la section.");
+    return;
+  }
+  var meMember = state.sectionMembers.filter(function(m){ return m.id===state.profile.memberId; })[0];
+  if(!meMember){
+    toast("Votre fiche est introuvable dans l’annuaire actuel de la section — actualisez depuis « Mon planning » puis réessayez.");
+    return;
+  }
+  openMemberPlanningExportSheet(meMember);
+}
+function openMyPlanningExchangePicker(){
+  var mine = state.myPlanning || DEFAULT_STATE.myPlanning;
+  var today = todayISO();
+  var upcoming = (mine.entries||[]).filter(function(e){ return e.date>=today; })
+    .sort(function(a,b){ return a.date<b.date ? -1 : a.date>b.date ? 1 : 0; });
+  if(upcoming.length===0){
+    toast("Aucune audience à venir vous concernant.");
+    return;
+  }
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, "Choisissez l’audience pour laquelle demander un échange :"));
+  var list = h("div", null);
+  upcoming.forEach(function(e){
+    var roleTxt = e.role==="president" ? "Vous présidez" : "Vous êtes assesseur";
+    list.appendChild(h("div", {class:"row-click", onclick:function(){
+      closeSheet();
+      if(state.sync.sectionCode){ openExchangeRequest(e); } else { openSwapRequestInstructions(e); }
+    }},
+      h("div", {class:"rc-main"},
+        h("div", {class:"rc-title"}, planningDateLabel(e.date)),
+        h("div", {class:"rc-sub"}, roleTxt+" · "+planningTypeLabel(e.type))
+      ),
+      icon("ic-chev", "chev")
+    ));
+  });
+  body.appendChild(list);
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:14px", onclick:closeSheet}, "Annuler"));
+  openSheet("Effectuer un échange", body);
 }
 
 renderers["mon-planning"] = function(root){
@@ -6831,6 +7668,13 @@ renderers["mon-planning"] = function(root){
     root.appendChild(refreshInput);
     root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:16px", onclick:function(){ refreshInput.click(); }}, "Importer une nouvelle version"));
   }
+
+  /* Deux actions demandées par l'utilisateur, pour tout conseiller
+     (voir openMyPlanningPrintSheet / openMyPlanningExchangePicker
+     ci-dessus) : imprimer son propre planning (JPEG, mois ou année) et
+     demander un échange, sans avoir à d'abord ouvrir une audience. */
+  root.appendChild(h("button", {class:"sheet-btn primary", style:"margin-top:16px", onclick:openMyPlanningPrintSheet}, "Imprimer mon planning"));
+  root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:openMyPlanningExchangePicker}, "Effectuer un échange"));
 };
 
 /* Sheet « Aller à un mois » de l'outil de planification : les flèches
@@ -7228,7 +8072,7 @@ function openAdminAudienceForm(group){
     });
 
     closeSheet();
-    render("sysadmin-section");
+    render("sysadmin-section-planning");
     toast((isEdit ? "Date modifiée" : "Date ajoutée")+" — pensez à « Enregistrer et synchroniser ».");
   }}, isEdit ? "Enregistrer les modifications" : "Ajouter la date"));
 
@@ -7236,7 +8080,7 @@ function openAdminAudienceForm(group){
     actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
       var idsToRemove = COLLEGES.map(function(c){ return ids[c]; });
       adminBuffer.planning = adminBuffer.planning.filter(function(p){ return idsToRemove.indexOf(p.id)===-1; });
-      closeSheet(); render("sysadmin-section"); toast("Audience supprimée — pensez à « Enregistrer et synchroniser ».");
+      closeSheet(); render("sysadmin-section-planning"); toast("Audience supprimée — pensez à « Enregistrer et synchroniser ».");
     }}, "Supprimer cette audience"));
   }
   actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
@@ -7696,39 +8540,88 @@ function openMemberPlanningExportSheet(member){
 }
 
 renderers["liens-utiles"] = function(root){
-  var p = state.profile;
+  /* Les liens proviennent en priorité des paramètres de la section
+     (configurés par l'administrateur, identiques pour tous — voir
+     sectionLink()), avec repli sur l'ancien réglage local à cet appareil
+     tant que la section n'a pas encore été configurée. Horaires par
+     défaut et contacts (voir defaultSectionSettings()) sont, eux,
+     purement des données de section : rien à afficher tant que
+     l'administrateur ne les a pas renseignés. */
   var links = [
-    {icon:"ic-globe", label:"Site web du CPH", sub:"Informations et actualités de votre conseil", url:p.cphWebUrl},
-    {icon:"ic-users", label:"Annuaire du CPH", sub:"Coordonnées des conseillers", url:p.annuaireUrl},
-    {icon:"ic-book", label:"Formation ENM", sub:"Plateforme e-formation de l’ENM", url:p.formationEnmUrl},
-    {icon:"ic-scale", label:"Légifrance", sub:"Textes de loi en vigueur", url:p.legifranceUrl},
-    {icon:"ic-building", label:"ENSAP / Bulletins de paie", sub:"Bulletins de paie et carrière", url:p.ensapUrl}
+    {icon:"ic-globe", label:"Site web du CPH", sub:"Informations et actualités de votre conseil", url:sectionLink("cphWebUrl")},
+    {icon:"ic-users", label:"Annuaire du CPH", sub:"Coordonnées des conseillers", url:sectionLink("annuaireUrl")},
+    {icon:"ic-book", label:"Formation ENM", sub:"Plateforme e-formation de l’ENM", url:sectionLink("formationEnmUrl")},
+    {icon:"ic-scale", label:"Légifrance", sub:"Textes de loi en vigueur", url:sectionLink("legifranceUrl")},
+    {icon:"ic-building", label:"ENSAP / Bulletins de paie", sub:"Bulletins de paie et carrière", url:sectionLink("ensapUrl")}
   ];
   var visible = links.filter(function(l){ return l.url; });
+  var settings = state.sectionSettings || defaultSectionSettings();
+  var timeRows = PLANNING_TYPES.filter(function(t){
+    return settings.defaultTimes[t.id] && (settings.defaultTimes[t.id].debut || settings.defaultTimes[t.id].fin);
+  });
+  var contactRows = SECTION_SETTINGS_CONTACTS.filter(function(c){
+    var f = settings.contacts[c.key];
+    return f && (f.prenom || f.nom || f.email || f.tel);
+  });
 
-  if(visible.length===0){
+  if(!visible.length && !timeRows.length && !contactRows.length){
     root.appendChild(h("div", {class:"init-empty"},
-      h("p", null, "Aucun lien n’est configuré pour votre CPH pour l’instant.")
+      h("p", null, "Aucune information n’est configurée pour votre section pour l’instant.")
     ));
     return;
   }
 
-  root.appendChild(h("p", {class:"lede"}, "Accès rapide aux ressources en ligne utiles à votre section."));
-  var panel = h("div", {class:"panel"});
-  visible.forEach(function(l){
-    panel.appendChild(h("a", {href:l.url, target:"_blank", rel:"noopener", class:"row-click link-row"},
-      h("div", {class:"ic"}, icon(l.icon)),
-      h("div", {class:"rc-main"},
-        h("div", {class:"rc-title"}, l.label),
-        h("div", {class:"rc-sub"}, l.sub)
-      ),
-      icon("ic-chev", "chev")
-    ));
-  });
-  root.appendChild(panel);
+  root.appendChild(h("p", {class:"lede"}, "Accès rapide aux ressources, horaires et contacts utiles à votre section."));
 
-  if(visible.length < links.length){
-    root.appendChild(h("div", {class:"footnote"}, "D’autres liens apparaîtront ici automatiquement dès qu’ils seront configurés pour votre CPH."));
+  if(visible.length){
+    var panel = h("div", {class:"panel"});
+    visible.forEach(function(l){
+      panel.appendChild(h("a", {href:l.url, target:"_blank", rel:"noopener", class:"row-click link-row"},
+        h("div", {class:"ic"}, icon(l.icon)),
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, l.label),
+          h("div", {class:"rc-sub"}, l.sub)
+        ),
+        icon("ic-chev", "chev")
+      ));
+    });
+    root.appendChild(panel);
+    if(visible.length < links.length){
+      root.appendChild(h("div", {class:"footnote"}, "D’autres liens apparaîtront ici automatiquement dès qu’ils seront configurés pour votre section."));
+    }
+  }
+
+  if(timeRows.length){
+    root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Horaires par défaut"));
+    var timesPanel = h("div", {class:"panel"});
+    timeRows.forEach(function(t){
+      var dt = settings.defaultTimes[t.id];
+      timesPanel.appendChild(h("div", {class:"info-row"},
+        h("div", {class:"info-label"}, t.label),
+        h("div", {class:"info-value"}, [dt.debut, dt.fin].filter(Boolean).map(function(v){ return v.replace(":","h"); }).join(" – ") || "—")
+      ));
+    });
+    root.appendChild(timesPanel);
+  }
+
+  if(contactRows.length){
+    root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Contacts"));
+    var contactsPanel = h("div", {class:"panel"});
+    contactRows.forEach(function(c){
+      var f = settings.contacts[c.key];
+      var name = [f.prenom, f.nom].filter(Boolean).join(" ") || "—";
+      contactsPanel.appendChild(h("div", {class:"row-click"},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, c.label),
+          h("div", {class:"rc-sub"}, name)
+        ),
+        h("div", {style:"display:flex; flex-direction:column; align-items:flex-end; gap:2px;"},
+          f.tel ? h("a", {href:"tel:"+f.tel, style:"font-size:.85rem;"}, formatTelFR(f.tel)) : null,
+          f.email ? h("a", {href:"mailto:"+f.email, style:"font-size:.85rem;"}, f.email) : null
+        )
+      ));
+    });
+    root.appendChild(contactsPanel);
   }
 };
 
@@ -8295,10 +9188,33 @@ render(navStack[navStack.length-1]);
     setAdminPinsDoc: function(registryId, data){
       var payload = Object.assign({}, data, { updatedAt: serverTimestamp() });
       return setDoc(doc(db, "adminPins", registryId), payload);
+    },
+    /* Annuaire partagé du CPH (voir ANNUAIRE PARTAGÉ DU CPH dans le script
+       classique ci-dessus) : un seul document par CPH (identifiant
+       déterministe), un champ "sections" avec une entrée chiffrée par
+       section. setCphDirectorySectionEntry écrit avec l'option merge :
+       chaque section met à jour SA SEULE entrée sans jamais toucher aux
+       autres — c'est ce qui permet à chaque synchronisation normale d'une
+       section de maintenir la liste à jour toute seule, sans geste de
+       republication centralisé à chaque fois. */
+    getCphDirectoryDoc: function(cphId){
+      return getDoc(doc(db, "cphDirectory", cphId)).then(function(snap){
+        if(!snap.exists()) return null;
+        var data = snap.data();
+        var sections = {};
+        Object.keys(data.sections||{}).forEach(function(k){
+          var e = data.sections[k] || {};
+          sections[k] = { iv: e.iv, ciphertext: e.ciphertext };
+        });
+        return { cph: data.cph||"", sections: sections };
+      });
+    },
+    setCphDirectorySectionEntry: function(cphId, sectionSlug, entry){
+      var sectionsPatch = {};
+      sectionsPatch[sectionSlug] = { iv: entry.iv, ciphertext: entry.ciphertext, updatedAt: serverTimestamp() };
+      return setDoc(doc(db, "cphDirectory", cphId), { cph: entry.cph||"", sections: sectionsPatch }, { merge: true });
     }
   };
 
   window.dispatchEvent(new Event("fb-sync-ready"));
 </script>
-
-</html>
