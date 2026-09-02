@@ -7,7 +7,7 @@
    Pensez à incrémenter CACHE_NAME à chaque nouvelle version envoyée aux
    testeurs : cela force la suppression de l'ancien cache et le
    téléchargement de la nouvelle version au prochain lancement. */
-var CACHE_NAME = "cph-toolbox-v24";
+var CACHE_NAME = "cph-toolbox-v25";
 var CORE_ASSETS = [
   "./",
   "./index.html",
