@@ -339,16 +339,37 @@
     width:100%; background:var(--panel-2); border:1px solid var(--divider); border-radius:var(--radius-sm);
     padding:10px 12px; font-size:.9rem; color:var(--text); font-family:var(--font-body);
   }
+  /* Constaté en revue UI : deux <select> côte à côte dans un .btn-row (ex.
+     filtres section/collège de l'Annuaire) se partagent la largeur en deux,
+     et un libellé un peu long ("Toutes les sections") se fait alors
+     tronquer BRUTALEMENT par le navigateur (aucune ellipse par défaut sur
+     un select fermé) plutôt que de s'afficher en entier — corrigé en
+     ajoutant une vraie ellipse plutôt qu'en misant sur des libellés assez
+     courts pour ne jamais déborder à toutes les tailles d'écran. */
+  select{ text-overflow:ellipsis; overflow:hidden; white-space:nowrap; }
   textarea{ resize:vertical; min-height:64px; }
   input:focus, select:focus, textarea:focus, button:focus-visible, .row-click:focus-visible, .chip:focus-visible{
     outline:2px solid var(--accent); outline-offset:1px;
   }
 
+  /* Revue UI : avec l'ancien `float:right` sur .copy-mini, le bouton
+     "Copier" n'était positionné qu'APRÈS la mise en page du texte de la
+     citation — sur une citation longue tenant plusieurs lignes, il se
+     retrouvait collé au dernier mot plutôt que clairement séparé comme un
+     vrai contrôle. Passage à flex (citation + bouton comme deux blocs
+     distincts) plutôt qu'un simple ajustement de marge, pour que le
+     bouton reste fixe quelle que soit la longueur du texte. */
   .quote-block{
     background:var(--accent-glow); border-left:3px solid var(--accent); border-radius:0 var(--radius-sm) var(--radius-sm) 0;
     padding:10px 12px; font-size:.86rem; font-weight:600; color:var(--text); margin:10px 0;
+    display:flex; align-items:flex-start; justify-content:space-between; gap:10px;
   }
-  .quote-block .copy-mini{ float:right; font-size:.68rem; font-weight:600; color:var(--accent-2); cursor:pointer; margin-left:8px; }
+  .quote-block .copy-mini{
+    flex:none; font-size:.68rem; font-weight:700; color:var(--accent-2); cursor:pointer;
+    padding:4px 10px; border:1px solid var(--accent-2); border-radius:999px; background:transparent;
+    white-space:nowrap;
+  }
+  .quote-block .copy-mini:hover{ background:var(--accent-2); color:var(--bg); }
   .note-block{
     background:var(--panel-2); border-radius:var(--radius-sm); padding:10px 12px; font-size:.82rem; color:var(--text-muted);
     line-height:1.55; margin:10px 0; font-style:italic;
@@ -3271,6 +3292,19 @@ function toast(msg){
   clearTimeout(toastTimer);
   toastTimer=setTimeout(function(){ t.classList.remove("show"); }, 2600);
 }
+/* Revue UI : le toast est un unique élément DOM global (#toast), jamais
+   attaché à un écran précis — sans ce nettoyage, un toast déclenché juste
+   avant une navigation (ex. la sauvegarde automatique tous les 7 jours,
+   au lancement) restait visible jusqu'à 2,6s PLUS TARD, par-dessus le
+   nouvel écran, recouvrant parfois des boutons du bas. Appelé depuis
+   go() : toute navigation ferme immédiatement un toast en cours plutôt
+   que de le laisser terminer sa course sur un écran qui n'a plus rien à
+   voir avec le message affiché. */
+function hideToastNow(){
+  clearTimeout(toastTimer);
+  var t=document.getElementById("toast");
+  if(t) t.classList.remove("show");
+}
 
 function openSheet(title, contentEl){
   var wrap = document.getElementById("sheet-content");
@@ -3327,6 +3361,7 @@ var ONBOARDING_SCREENS = ["onboarding", "onboarding-activite", "onboarding-signa
 var renderers = {};
 
 function go(screenId, replace){
+  hideToastNow();
   if(!replace) navStack.push(screenId);
   else navStack[navStack.length-1]=screenId;
   render(screenId);
@@ -3339,7 +3374,7 @@ function go(screenId, replace){
   maybeAutoPullSection();
 }
 function goBack(){
-  if(navStack.length>1){ navStack.pop(); render(navStack[navStack.length-1]); }
+  if(navStack.length>1){ hideToastNow(); navStack.pop(); render(navStack[navStack.length-1]); }
 }
 /* Écran de blocage (voir state.sync.revoked, applySyncPayloadToState) :
    volontairement affiché ici, au point de passage UNIQUE par lequel
@@ -3921,6 +3956,15 @@ var SECTION_SETTINGS_CONTACTS = [
   {key:"batonnier", label:"Bâtonnier / Bâtonnière"},
   {key:"directeurGreffe", label:"Directeur / Directrice de greffe"}
 ];
+/* Sous-ensemble de SECTION_SETTINGS_CONTACTS réservé, à l'affichage, au
+   Président(e) du CPH (voir renderers["annuaire-cph"] > "Contacts
+   institutionnels du CPH", déjà restreint à profile.presidentCph===true).
+   Revue UI : renderers["liens-utiles"] affichait jusqu'ici ces 7 fiches à
+   TOUT conseiller synchronisé, sans la même restriction — incohérent
+   avec l'intention posée sur l'écran Annuaire. Facteur ici pour que les
+   deux écrans appliquent exactement la même règle plutôt que de la
+   dupliquer (et risquer de la faire diverger à nouveau). */
+var CPH_INSTITUTIONAL_CONTACT_KEYS = ["presidentTj","secretariatTj","presidentCourAppel","secretariatCourAppel","secretaireGeneralCourAppel","batonnier","directeurGreffe"];
 function contactFicheSummary(c){
   var name = [c.prenom, c.nom].filter(Boolean).join(" ");
   return [name, c.tel ? formatTelFR(c.tel) : "", c.email].filter(Boolean).join(" — ") || "Non renseigné";
@@ -5399,13 +5443,19 @@ renderers.vacations = function(root){
   }
   root.appendChild(panel);
 
-  root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){ openVacationForm(null); }},
+  /* Revue UI : "+ Ajouter une vacation" est l'action la plus fréquente
+     de tout l'écran (au quotidien), mais ressortait moins fort que
+     "Éditer RITA du mois" (un geste mensuel, plus occasionnel) — passée
+     en primary pour refléter son importance réelle ; "Éditer RITA du
+     mois" repasse en accent, toujours mise en avant mais un cran
+     en dessous. */
+  root.appendChild(h("button", {class:"sheet-btn primary", style:"margin-top:14px", onclick:function(){ openVacationForm(null); }},
     "+ Ajouter une vacation"));
 
   root.appendChild(h("div", {class:"section-title"}, "Relevé du mois"));
   root.appendChild(h("p", {class:"lede"}, "Télécharge un document imprimable (RITA) que vous pouvez ouvrir puis enregistrer en PDF ou imprimer — ou, si ce format n’est pas accepté sur cet appareil, une image du relevé prête à imprimer directement — ainsi qu’un export CSV pour votre tableur."));
   var exportRow = h("div", {class:"btn-row"});
-  exportRow.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){ printVacations(vacViewMonth, entries, total); }}, "Éditer RITA du mois"));
+  exportRow.appendChild(h("button", {class:"sheet-btn accent", onclick:function(){ printVacations(vacViewMonth, entries, total); }}, "Éditer RITA du mois"));
   exportRow.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){ exportVacationsCSV(vacViewMonth, entries); }}, "Export CSV"));
   root.appendChild(exportRow);
 
@@ -5879,9 +5929,17 @@ function renderGuide(root, guideKey){
   var gs = getGuideState();
 
   if(guideKey==="bco"){
+    /* Revue UI : cette rubrique reste grisée et non cliquable sur
+       l'Accueil (voir card("ic-handshake", ..., disabled:true)) — cet
+       écran n'est donc, en usage normal, jamais atteint par un
+       conseiller. Le texte affiché ici doit malgré tout rester un texte
+       UTILISATEUR neutre (et non une note adressée au développeur), au
+       cas où quelqu'un y accéderait directement (outils de
+       développement, lien direct...), et pour ne pas avoir à y repenser
+       le jour où cette rubrique sera dégrisée. */
     root.appendChild(h("div", {class:"banner"},
       h("span", {class:"attn-pulse"}),
-      h("span", null, h("b", null, "Brouillon à valider. "), "Cette trame est une base générique, non issue d’un document source vérifié. Envoyez-moi votre propre fil rouge « Présider un BCO » (comme celui fourni pour le BJ) pour que je le remplace par un contenu précis et sourcé.")
+      h("span", null, h("b", null, "Contenu en cours de finalisation. "), "Cette trame est une base de travail générique, pas encore validée sur un document source — à utiliser avec prudence en l’état.")
     ));
   }
 
@@ -7996,7 +8054,15 @@ renderers["mon-planning"] = function(root){
      (voir openMyPlanningPrintSheet / openMyPlanningExchangePicker
      ci-dessus) : imprimer son propre planning (JPEG, mois ou année) et
      demander un échange, sans avoir à d'abord ouvrir une audience. */
-  root.appendChild(h("button", {class:"sheet-btn primary", style:"margin-top:16px", onclick:openMyPlanningPrintSheet}, "Imprimer mon planning"));
+  /* Revue UI : les deux styles étaient inversés par rapport à leur poids
+     réel pour l'utilisateur — "Imprimer" (un export ponctuel) ressortait
+     plus fort visuellement que "Effectuer un échange" (l'action la plus
+     engageante de cet écran). Aucun des deux n'étant "l'action
+     principale" de l'écran (celui-ci sert avant tout à CONSULTER son
+     planning), les deux passent en accent — l'échange restant le plus
+     visible des deux car c'est celui qui modifie réellement quelque
+     chose, contrairement à un simple export. */
+  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:16px", onclick:openMyPlanningPrintSheet}, "Imprimer mon planning"));
   root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:openMyPlanningExchangePicker}, "Effectuer un échange"));
 };
 
@@ -8883,7 +8949,12 @@ renderers["liens-utiles"] = function(root){
   var timeRows = PLANNING_TYPES.filter(function(t){
     return settings.defaultTimes[t.id] && (settings.defaultTimes[t.id].debut || settings.defaultTimes[t.id].fin);
   });
+  /* Revue UI : les 7 fiches institutionnelles du CPH (TJ, Cour d'appel,
+     Bâtonnier, Greffe) n'ont de sens que pour la présidence du CPH — même
+     restriction que sur l'écran Annuaire > Contacts utiles, désormais
+     partagée via CPH_INSTITUTIONAL_CONTACT_KEYS plutôt que dupliquée. */
   var contactRows = SECTION_SETTINGS_CONTACTS.filter(function(c){
+    if(CPH_INSTITUTIONAL_CONTACT_KEYS.indexOf(c.key)!==-1 && state.profile.presidentCph!==true) return false;
     var f = settings.contacts[c.key];
     return f && (f.prenom || f.nom || f.email || f.tel);
   });
