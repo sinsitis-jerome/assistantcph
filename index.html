@@ -1078,6 +1078,18 @@ var DEFAULT_STATE = {
     prenom:"", nom:"", tel:"", college:"", section:"", cph:"", cphAutre:"",
     remunere:null, poste:null, horaireDebut:"", horaireFin:"",
     sectionRole:null, presidentCph:null, referiste:null,
+    /* Fonction au niveau du CPH (aucune / président(e) / vice-président(e)),
+       distincte de sectionRole (fonction en SECTION) : une même personne
+       peut cumuler les deux (ex. président(e) de section ET président(e)
+       de CPH — voir échange avec l'utilisateur, "a-t-on prévu ce cas ?").
+       Comme sectionRole, dérivée depuis une étiquette posée par
+       l'administrateur (ici sur les fiches "Président(e) du CPH"/
+       "Vice-président(e) du CPH" de Paramètres de section — voir
+       deriveCphRoleFor) plutôt que déclarée par la personne elle-même.
+       Remplace l'ancien presidentCph booléen ci-dessus (conservé pour la
+       seule compatibilité de lecture d'une sauvegarde antérieure — voir
+       migrate()). */
+    cphRole:null,
     annuaireUrl:"", cphWebUrl:"", vacationsEmail:"", presidentEmail:"",
     formationEnmUrl:"https://e-formation.enm.justice.fr/login/index.php",
     legifranceUrl:"https://www.legifrance.gouv.fr/",
@@ -1219,6 +1231,25 @@ function migrate(parsed){
          précisément pour ne plus jamais bloquer un profil déjà complet
          par ailleurs sur ce détail. */
       s.profile.presidentCph = p.presidentCph===true;
+      /* cphRole (nouveau) : fonction au niveau du CPH, dérivée des fiches
+         "Président(e) du CPH"/"Vice-président(e) du CPH" désormais
+         rattachables à un conseiller précis (voir deriveCphRoleFor,
+         SECTION_SETTINGS_CONTACTS) — remplace l'ancien booléen presidentCph
+         ci-dessus (conservé en lecture seule) comme unique source de vérité
+         pour ce qui en dépend (Annuaire > Contacts institutionnels/
+         greffiers, accueil > "Administrer le CPH", Liens utiles > contacts
+         institutionnels). Restaure une valeur déjà connue si elle existe ;
+         sinon reprend l'ancien presidentCph=true comme "president" (migration
+         d'une installation antérieure à ce champ) ; jamais recalculée toute
+         seule ici — comme sectionRole, seul un nouveau passage par "Changer
+         mon identité" la rafraîchit (voir selectMember). */
+      if(["none","president","vice-president"].indexOf(p.cphRole)!==-1){
+        s.profile.cphRole = p.cphRole;
+      } else if(p.presidentCph===true){
+        s.profile.cphRole = "president";
+      } else {
+        s.profile.cphRole = null;
+      }
       s.profile.referiste = p.referiste===true;
       s.profile.annuaireUrl = typeof p.annuaireUrl==="string" ? p.annuaireUrl : "";
       s.profile.cphWebUrl = typeof p.cphWebUrl==="string" ? p.cphWebUrl : "";
@@ -1653,15 +1684,31 @@ function defaultSectionSettings(){
     },
     contacts: {
       greffier: { prenom:"", nom:"", email:"", tel:"" },
-      presidentCph: { prenom:"", nom:"", email:"", tel:"" },
-      vicePresidentCph: { prenom:"", nom:"", email:"", tel:"" },
+      /* presidentCph/vicePresidentCph portent, en plus du nom/tél/email
+         affichés à tous, trois champs de référence optionnels
+         (refCph/refSection/refMemberId) posés uniquement quand la fiche a
+         été RATTACHÉE à un conseiller précis via le sélecteur toutes-
+         sections-confondues (openCrossSectionMemberPicker, voir
+         openAdminSectionContactForm) plutôt que saisie à la main. C'est ce
+         rattachement qui permet à l'appareil de la personne désignée de se
+         reconnaître automatiquement comme président(e)/vice-président(e) de
+         CPH (voir deriveCphRoleFor, profile.cphRole) — voir échange avec
+         l'utilisateur, "un président (ou vice) de section peut aussi être
+         président (ou vice) de cph". Propagée à toutes les sections du CPH
+         à chaque modification (voir propagateCphContactToAllSections),
+         contrairement aux huit autres fiches de contact, dupliquées section
+         par section sans synchronisation entre elles. */
+      presidentCph: { prenom:"", nom:"", email:"", tel:"", refCph:"", refSection:"", refMemberId:"" },
+      vicePresidentCph: { prenom:"", nom:"", email:"", tel:"", refCph:"", refSection:"", refMemberId:"" },
       presidentTj: { prenom:"", nom:"", email:"", tel:"" },
       secretariatTj: { prenom:"", nom:"", email:"", tel:"" },
       presidentCourAppel: { prenom:"", nom:"", email:"", tel:"" },
       secretariatCourAppel: { prenom:"", nom:"", email:"", tel:"" },
       secretaireGeneralCourAppel: { prenom:"", nom:"", email:"", tel:"" },
       batonnier: { prenom:"", nom:"", email:"", tel:"" },
-      directeurGreffe: { prenom:"", nom:"", email:"", tel:"" }
+      directeurGreffe: { prenom:"", nom:"", email:"", tel:"" },
+      procureurRepublique: { prenom:"", nom:"", email:"", tel:"" },
+      procureurAdjoint: { prenom:"", nom:"", email:"", tel:"" }
     },
     /* Code secret partagé par TOUT le CPH (pas seulement cette section),
        généré une fois par l'administrateur — voir ANNUAIRE PARTAGÉ DU CPH
@@ -1704,7 +1751,14 @@ function sanitizeSectionSettings(raw){
           prenom: typeof c.prenom==="string" ? c.prenom : "",
           nom: typeof c.nom==="string" ? c.nom : "",
           email: typeof c.email==="string" ? c.email : "",
-          tel: typeof c.tel==="string" ? c.tel : ""
+          tel: typeof c.tel==="string" ? c.tel : "",
+          /* Champs de référence (presidentCph/vicePresidentCph uniquement en
+             pratique, mais sanitizés génériquement ici comme le reste — voir
+             defaultSectionSettings) : jamais interprétés à l'affichage,
+             seulement comparés par deriveCphRoleFor. */
+          refCph: typeof c.refCph==="string" ? c.refCph : "",
+          refSection: (typeof c.refSection==="string" && SECTIONS.indexOf(c.refSection)!==-1) ? c.refSection : "",
+          refMemberId: typeof c.refMemberId==="string" ? c.refMemberId : ""
         };
       }
     });
@@ -2930,6 +2984,13 @@ function openPickMyMemberSheet(onDone){
        (voir isProfileComplete) dès qu'une fiche est choisie, sans exiger
        un passage superflu par Réglages. */
     state.profile.sectionRole = m.sectionRole || "none";
+    /* Fonction au niveau du CPH (distincte de sectionRole ci-dessus) : voir
+       deriveCphRoleFor — permet à un président(e)/vice-président(e) de
+       section qui est AUSSI président(e)/vice-président(e) de CPH de se
+       reconnaître comme tel, dès lors que l'administrateur l'a désigné(e)
+       via l'une des fiches "Président(e) du CPH"/"Vice-président(e) du CPH"
+       de Paramètres de section. */
+    state.profile.cphRole = deriveCphRoleFor(m.id);
     saveState();
     closeSheet();
     toast("Profil lié à « "+memberDisplayName(m)+" ».");
@@ -3544,7 +3605,13 @@ renderers.onboarding = function(root){
       });
     }),
     roleCard("ic-building", "Président(e) de CPH", "Configuration classique pour l'instant, depuis Réglages", function(){
-      state.profile.presidentCph = true;
+      /* Auto-déclaré (comme avant) — ce parcours reste réservé à qui est
+         UNIQUEMENT président(e) de CPH sans jamais rejoindre de section.
+         Voir profile.cphRole : pour qui cumule aussi une fonction de
+         section, c'est désormais l'administrateur qui désigne la personne
+         (Paramètres de section > Président(e)/Vice-président(e) du CPH),
+         et cphRole se dérive alors automatiquement au choix de sa fiche. */
+      state.profile.cphRole = "president";
       completeOnboarding("president-cph", "settings");
     }),
     roleCard("ic-gear", "Administrateur", "Accès réservé — code à 8 chiffres requis", function(){
@@ -3635,6 +3702,11 @@ renderers["onboarding-signature"] = function(root){
     if(!p.signature) return;
     if(p.presidentCph===null) p.presidentCph = false;
     if(p.referiste===null) p.referiste = false;
+    /* Filet de sécurité pour le cas "Je ne trouve pas mon nom" (m null,
+       selectMember jamais appelé donc cphRole jamais dérivé) — même logique
+       que les deux champs ci-dessus, pour ne jamais laisser cphRole à null
+       à l'issue d'un accueil par ailleurs terminé. */
+    if(p.cphRole===null) p.cphRole = "none";
     saveState();
     var landing = landingForSectionRole();
     completeOnboarding(landing.role, landing.screens);
@@ -3954,17 +4026,59 @@ var SECTION_SETTINGS_CONTACTS = [
   {key:"secretariatCourAppel", label:"Secrétariat de la Cour d'appel"},
   {key:"secretaireGeneralCourAppel", label:"Secrétaire général(e) de la Cour d'appel"},
   {key:"batonnier", label:"Bâtonnier / Bâtonnière"},
-  {key:"directeurGreffe", label:"Directeur / Directrice de greffe"}
+  {key:"directeurGreffe", label:"Directeur / Directrice de greffe"},
+  {key:"procureurRepublique", label:"Procureur de la République"},
+  {key:"procureurAdjoint", label:"Procureur(e) adjoint(e)"}
 ];
-/* Sous-ensemble de SECTION_SETTINGS_CONTACTS réservé, à l'affichage, au
-   Président(e) du CPH (voir renderers["annuaire-cph"] > "Contacts
-   institutionnels du CPH", déjà restreint à profile.presidentCph===true).
-   Revue UI : renderers["liens-utiles"] affichait jusqu'ici ces 7 fiches à
-   TOUT conseiller synchronisé, sans la même restriction — incohérent
-   avec l'intention posée sur l'écran Annuaire. Facteur ici pour que les
-   deux écrans appliquent exactement la même règle plutôt que de la
+/* Sous-ensemble de SECTION_SETTINGS_CONTACTS réservé, à l'affichage, à la
+   présidence du CPH (président(e) ET vice-président(e) — voir isCphOfficer
+   ci-dessous ; renderers["annuaire-cph"] > "Contacts institutionnels du
+   CPH"). Revue UI : renderers["liens-utiles"] affichait jusqu'ici ces 7
+   fiches à TOUT conseiller synchronisé, sans la même restriction —
+   incohérent avec l'intention posée sur l'écran Annuaire. Facteur ici pour
+   que les deux écrans appliquent exactement la même règle plutôt que de la
    dupliquer (et risquer de la faire diverger à nouveau). */
-var CPH_INSTITUTIONAL_CONTACT_KEYS = ["presidentTj","secretariatTj","presidentCourAppel","secretariatCourAppel","secretaireGeneralCourAppel","batonnier","directeurGreffe"];
+var CPH_INSTITUTIONAL_CONTACT_KEYS = ["presidentTj","secretariatTj","presidentCourAppel","secretariatCourAppel","secretaireGeneralCourAppel","batonnier","directeurGreffe","procureurRepublique","procureurAdjoint"];
+/* Un président(e) ET un vice-président(e) du CPH voient tous deux les mêmes
+   contacts institutionnels (voir échange avec l'utilisateur : « pour les
+   contacts, le vice-président de CPH voit la même chose que le président de
+   CPH ... il est simplement nécessaire de les distinguer [pour leur fiche
+   d'identité et leur collège] »). Ce sont ces deux autres aspects — jamais
+   la visibilité des contacts — qui restent distincts entre les deux
+   fonctions ailleurs dans l'application. */
+function isCphOfficer(role){ return role==="president" || role==="vice-president"; }
+/* Fonction au niveau du CPH (aucune / président(e) / vice-président(e)),
+   dérivée — comme sectionRole pour la fonction en SECTION — d'une étiquette
+   posée par l'administrateur, mais ici sur les fiches "Président(e) du
+   CPH"/"Vice-président(e) du CPH" ci-dessus plutôt que directement sur la
+   fiche de l'annuaire (voir échange avec l'utilisateur : "un président (ou
+   vice) de section peut aussi être président (ou vice) de cph — a-t-on
+   prévu ce cas ?"). Une fois l'une de ces deux fiches RATTACHÉE à un
+   conseiller précis via le sélecteur toutes-sections-confondues
+   (openCrossSectionMemberPicker, voir openAdminSectionContactForm), elle
+   porte trois champs de référence (refCph/refSection/refMemberId) en plus
+   du nom/tél/email affichés — cette fonction ne fait que vérifier si LA
+   FICHE COURANTE de cet appareil (celle qu'on vient de choisir dans son
+   PROPRE annuaire de section, donc dans state.sectionSettings déjà
+   synchronisé pour CETTE section) est la cible de l'une des deux. Comme
+   sectionRole, dérivée une seule fois au moment de choisir sa fiche (voir
+   selectMember), jamais recalculée automatiquement en arrière-plan : une
+   nouvelle désignation par l'administrateur n'est reprise sur l'appareil
+   concerné qu'après un nouveau passage par "Changer mon identité" — même
+   limite déjà acceptée pour sectionRole, pour rester cohérent plutôt que
+   d'en construire une seule à moitié. */
+function deriveCphRoleFor(memberId){
+  var cph = state.profile.cph===CPH_AUTRE ? state.profile.cphAutre : state.profile.cph;
+  var section = state.profile.section;
+  var contacts = state.sectionSettings && state.sectionSettings.contacts;
+  if(!contacts || !memberId || !cph || !section) return "none";
+  function targets(ref){
+    return !!(ref && ref.refMemberId && ref.refMemberId===memberId && ref.refSection===section && ref.refCph===cph);
+  }
+  if(targets(contacts.presidentCph)) return "president";
+  if(targets(contacts.vicePresidentCph)) return "vice-president";
+  return "none";
+}
 function contactFicheSummary(c){
   var name = [c.prenom, c.nom].filter(Boolean).join(" ");
   return [name, c.tel ? formatTelFR(c.tel) : "", c.email].filter(Boolean).join(" — ") || "Non renseigné";
@@ -4076,11 +4190,12 @@ renderers["sysadmin-section-settings"] = function(root){
   root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Contacts"));
   var contactsPanel = h("div", {class:"panel"});
   SECTION_SETTINGS_CONTACTS.forEach(function(c){
+    var linked = c.pickable && s.contacts[c.key] && s.contacts[c.key].refMemberId;
     contactsPanel.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){ openAdminSectionContactForm(c.key, c.label, c.pickable); },
         onkeydown:function(e){ if(e.key==="Enter") openAdminSectionContactForm(c.key, c.label, c.pickable); }},
       h("div", {class:"rc-main"},
         h("div", {class:"rc-title"}, c.label),
-        h("div", {class:"rc-sub"}, contactFicheSummary(s.contacts[c.key]))
+        h("div", {class:"rc-sub"}, contactFicheSummary(s.contacts[c.key]) + (linked ? " — rattachée" : ""))
       ),
       icon("ic-chev", "chev")
     ));
@@ -4123,12 +4238,33 @@ function openAdminSectionContactForm(key, label, pickable, prefill){
 
   if(pickable){
     form.appendChild(h("button", {class:"sheet-btn ghost", type:"button", style:"margin-bottom:14px", onclick:function(){
-      openCrossSectionMemberPicker(adminBuffer.cph, function(m){
+      openCrossSectionMemberPicker(adminBuffer.cph, function(m, section){
         openAdminSectionContactForm(key, label, pickable, {
-          prenom: m.prenom || "", nom: m.nom || "", email: m.email || "", tel: m.tel || ""
+          prenom: m.prenom || "", nom: m.nom || "", email: m.email || "", tel: m.tel || "",
+          /* Rattachement (voir deriveCphRoleFor) : c'est CE choix précis, et
+             lui seul, qui permettra à l'appareil de ce conseiller de se
+             reconnaître automatiquement comme président(e)/vice-président(e)
+             de CPH — voir defaultSectionSettings et la propagation à toutes
+             les sections plus bas (bouton "Enregistrer"). */
+          refCph: adminBuffer.cph, refSection: section, refMemberId: m.id || ""
         });
       });
     }}, "Choisir un conseiller déjà inscrit…"));
+  }
+
+  /* Indicateur de rattachement + désassociation : visible uniquement quand
+     cette fiche a bien été choisie via le sélecteur ci-dessus (pas une
+     simple saisie manuelle du nom, qui ne porte jamais de référence). Rendu
+     explicite plutôt qu'une désynchronisation silencieuse si l'admin
+     corrige le nom à la main par la suite : le rattachement reste tel quel
+     tant qu'il n'est pas explicitement retiré ici. */
+  if(pickable && draft.refMemberId){
+    form.appendChild(h("div", {class:"footnote", style:"margin:-4px 0 14px; padding:8px 10px; background:var(--accent-glow); border-radius:8px; color:var(--accent-2);"},
+      "Rattachée à la fiche de "+([draft.prenom, draft.nom].filter(Boolean).join(" ") || "cette personne")+" ("+draft.refSection+") — son appareil reconnaît automatiquement cette fonction dès qu'il ou elle choisit sa fiche dans l'application."
+    ));
+    form.appendChild(h("button", {class:"sheet-btn ghost", type:"button", style:"margin-bottom:14px", onclick:function(){
+      openAdminSectionContactForm(key, label, pickable, Object.assign({}, draft, {refCph:"", refSection:"", refMemberId:""}));
+    }}, "Dissocier (garder le nom en texte libre)"));
   }
 
   form.appendChild(h("label", {class:"field-label"}, "Prénom"));
@@ -4146,19 +4282,46 @@ function openAdminSectionContactForm(key, label, pickable, prefill){
   form.appendChild(telIn = h("input", {type:"tel", value:draft.tel, autocomplete:"tel"}));
   bindTelFormatting(telIn);
 
+  /* presidentCph/vicePresidentCph désignent une seule et même vraie personne
+     pour tout le CPH : contrairement aux huit autres fiches, propagées ici
+     à toutes les autres sections déjà indexées à chaque modification (même
+     schéma que activateCphDirectory) — sinon chaque section n'en verrait
+     qu'une copie potentiellement différente/périmée, et surtout, sur
+     l'appareil de la personne désignée, le rattachement (deriveCphRoleFor)
+     ne serait jamais visible si elle n'a été saisie que sur UNE AUTRE
+     section que la sienne (cas courant du sélecteur toutes-sections-
+     confondues). */
+  var isCphRoleKey = (key==="presidentCph" || key==="vicePresidentCph");
   var actions = h("div", {style:"margin-top:18px"});
   actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
-    adminBuffer.sectionSettings.contacts[key] = {
+    var contactValue = {
       prenom: prenomIn.value.trim(), nom: nomIn.value.trim(),
-      email: emailIn.value.trim(), tel: telIn.value.trim()
+      email: emailIn.value.trim(), tel: telIn.value.trim(),
+      refCph: draft.refCph || "", refSection: draft.refSection || "", refMemberId: draft.refMemberId || ""
     };
+    adminBuffer.sectionSettings.contacts[key] = contactValue;
     closeSheet(); render("sysadmin-section-settings"); scheduleAdminAutoPush();
-    toast("Informations enregistrées.");
+    if(isCphRoleKey){
+      toast("Informations enregistrées — propagation aux autres sections…");
+      propagateCphContactToAllSections(key, adminBuffer.cph, contactValue, function(ok){
+        toast(ok ? ("Propagé à "+ok+(ok>1?" autres sections.":" autre section.")) : "Informations enregistrées (aucune autre section à mettre à jour).");
+      });
+    } else {
+      toast("Informations enregistrées.");
+    }
   }}, "Enregistrer"));
   actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
-    adminBuffer.sectionSettings.contacts[key] = {prenom:"", nom:"", email:"", tel:""};
+    var blank = {prenom:"", nom:"", email:"", tel:"", refCph:"", refSection:"", refMemberId:""};
+    adminBuffer.sectionSettings.contacts[key] = blank;
     closeSheet(); render("sysadmin-section-settings"); scheduleAdminAutoPush();
-    toast("Informations effacées.");
+    if(isCphRoleKey){
+      toast("Informations effacées — propagation aux autres sections…");
+      propagateCphContactToAllSections(key, adminBuffer.cph, blank, function(ok){
+        toast(ok ? ("Effacé sur "+ok+(ok>1?" autres sections.":" autre section.")) : "Informations effacées.");
+      });
+    } else {
+      toast("Informations effacées.");
+    }
   }}, "Effacer ces informations"));
   actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
   form.appendChild(actions);
@@ -4198,8 +4361,8 @@ function openCrossSectionMemberPicker(cph, onPick){
     found.sort(function(a,b){ return memberSortCompare(a.member, b.member); }).forEach(function(entry){
       listBox.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){
           closeSheet();
-          onPick(entry.member);
-        }, onkeydown:function(e){ if(e.key==="Enter"){ closeSheet(); onPick(entry.member); } }},
+          onPick(entry.member, entry.section);
+        }, onkeydown:function(e){ if(e.key==="Enter"){ closeSheet(); onPick(entry.member, entry.section); } }},
         h("div", {class:"rc-main"},
           h("div", {class:"rc-title"}, memberDisplayName(entry.member) || "(Sans nom)"),
           h("div", {class:"rc-sub"}, entry.section+(entry.member.sectionRole ? " — "+sectionRoleLabel(entry.member.sectionRole) : ""))
@@ -4216,6 +4379,62 @@ function openCrossSectionMemberPicker(cph, onPick){
         done();
       }).catch(done);
     }).catch(done);
+  });
+}
+
+/* Propage une fiche de contact "de rôle CPH" (Président(e)/Vice-président(e)
+   du CPH — les deux seules fiches "pickable" de SECTION_SETTINGS_CONTACTS)
+   vers TOUTES LES AUTRES sections déjà indexées du CPH, plutôt que de la
+   laisser dupliquée section par section comme les huit autres fiches de
+   contact (limite déjà documentée ailleurs : "une centralisation... reste
+   une piste possible pour plus tard").
+
+   Nécessaire pour deux raisons à la fois, ajoutées ensemble en réponse à la
+   même demande de l'utilisateur (« un président (ou vice) de section peut
+   aussi être président (ou vice) de cph — a-t-on prévu ce cas ? ») :
+   1. Cohérence de l'annuaire : ce contact désigne UNE seule vraie personne
+      pour tout le CPH — sans cette propagation, chaque section verrait une
+      copie potentiellement différente/périmée selon la dernière fois où
+      son propre "Enregistrer et synchroniser" a été déclenché.
+   2. Et surtout : c'est la fonction en section state.profile.cphRole (voir
+      deriveCphRoleFor) qui en dépend directement. Cette fonction ne se
+      déduit, sur l'appareil de la personne désignée, qu'à partir des
+      DONNÉES DE SA PROPRE SECTION (celle qu'elle synchronise) — si la
+      référence n'existe que sur la section actuellement ouverte dans
+      l'espace administrateur (souvent une AUTRE section que celle de la
+      personne désignée, via le sélecteur toutes-sections-confondues), son
+      propre appareil ne la verrait jamais.
+
+   Même schéma que activateCphDirectory() plus haut (pull/patch/push section
+   par section, en s'appuyant sur le registre déjà connu) : la section
+   actuellement ouverte dans l'espace administrateur n'est délibérément PAS
+   touchée par cette boucle (déjà mise à jour localement dans adminBuffer,
+   couverte par le prochain envoi automatique/"Enregistrer et synchroniser"
+   normal de cet écran). Best-effort et silencieux section par section (une
+   section hors connexion ou pas encore indexée ne bloque pas les autres) ;
+   le nombre de sections effectivement mises à jour est passé à onDone pour
+   le toast affiché à l'appelant. */
+function propagateCphContactToAllSections(key, cph, contactValue, onDone){
+  var others = SECTIONS.filter(function(s){ return s!==adminBuffer.section; });
+  if(!others.length){ onDone(0); return; }
+  var okCount = 0, pending = others.length;
+  function settle(){ pending--; if(pending===0) onDone(okCount); }
+  others.forEach(function(sectionName){
+    lookupAdminRegistry(adminSessionCode, cph, sectionName).then(function(sectionCode){
+      if(!sectionCode){ settle(); return; }
+      pullSectionSync(sectionCode).then(function(result){
+        var payload = (result && result.payload) || {};
+        var members = Array.isArray(payload.sectionMembers) ? payload.sectionMembers : [];
+        var planning = Array.isArray(payload.planning) ? payload.planning : [];
+        var settings = sanitizeSectionSettings(payload.sectionSettings);
+        settings.contacts[key] = contactValue;
+        return pushSectionSyncPayload(sectionCode, cph, sectionName, {
+          sectionMembers: members, planning: planning, sectionSettings: settings
+        });
+      }).then(function(){
+        okCount++; settle();
+      }).catch(settle);
+    }).catch(settle);
   });
 }
 
@@ -4370,11 +4589,12 @@ renderers["annuaire-cph"] = function(root){
      de l'annuaire des conseillers ... on va positionner pour l'utilisateur
      les contacts utiles pour sa section ». Toujours les 5 mêmes lignes pour
      tout le monde (conseiller(e) simple ou président(e)/vice-président(e)
-     de section) ; un second bloc, réservé au Président du CPH
-     (profile.presidentCph), ajoute les contacts institutionnels du CPH
-     (dupliqués section par section, voir « Paramètres de la section » —
-     ceux de la section de la personne qui regarde servent de référence)
-     ainsi que les greffiers de TOUTES les sections. */
+     de section) ; un second bloc, réservé à la présidence du CPH
+     (isCphOfficer(profile.cphRole) — président(e) ET vice-président(e),
+     voir échange avec l'utilisateur ci-dessous), ajoute les contacts
+     institutionnels du CPH (dupliqués section par section, voir « Paramètres
+     de la section » — ceux de la section de la personne qui regarde servent
+     de référence) ainsi que les greffiers de TOUTES les sections. */
   function ficheName(f){ return (f && [f.prenom, f.nom].filter(Boolean).join(" ")) || null; }
   var sc = state.sectionSettings.contacts;
   var presSection = sectionRoleContact("president");
@@ -4394,18 +4614,22 @@ renderers["annuaire-cph"] = function(root){
     contactsPanel.appendChild(contactInfoRow("Vice-président(e) du CPH", ficheName(sc.vicePresidentCph), sc.vicePresidentCph));
     root.appendChild(contactsPanel);
 
-    if(state.profile.presidentCph===true){
+    /* Réservé à la présidence du CPH — président(e) ET vice-président(e),
+       qui voient tous deux exactement les mêmes contacts (voir échange avec
+       l'utilisateur : seules la fiche d'identité et le collège distinguent
+       réellement les deux fonctions, jamais cette visibilité). */
+    if(isCphOfficer(state.profile.cphRole)){
       var institPanel = h("div", {class:"panel", style:"margin-top:12px"});
-      [
-        {key:"presidentTj", label:"Président(e) du Tribunal judiciaire"},
-        {key:"secretariatTj", label:"Secrétariat du Tribunal judiciaire"},
-        {key:"presidentCourAppel", label:"Président(e) de la Cour d'appel"},
-        {key:"secretariatCourAppel", label:"Secrétariat de la Cour d'appel"},
-        {key:"secretaireGeneralCourAppel", label:"Secrétaire général(e) de la Cour d'appel"},
-        {key:"directeurGreffe", label:"Directeur / Directrice de greffe"},
-        {key:"batonnier", label:"Bâtonnier / Bâtonnière"}
-      ].forEach(function(c){
-        var f = sc[c.key];
+      /* Dérivé de CPH_INSTITUTIONAL_CONTACT_KEYS (+ le libellé associé dans
+         SECTION_SETTINGS_CONTACTS) plutôt qu'une liste à part, désormais
+         qu'une troisième liste (le filtre de renderers["liens-utiles"]
+         partage déjà CPH_INSTITUTIONAL_CONTACT_KEYS) risquerait de diverger
+         silencieusement d'une nouvelle fiche institutionnelle ajoutée à
+         l'une sans l'autre (voir Procureur de la République / adjoint). */
+      CPH_INSTITUTIONAL_CONTACT_KEYS.forEach(function(key){
+        var c = SECTION_SETTINGS_CONTACTS.filter(function(sc0){ return sc0.key===key; })[0];
+        if(!c) return;
+        var f = sc[key];
         institPanel.appendChild(contactInfoRow(c.label, ficheName(f), f));
       });
       root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Contacts institutionnels du CPH"));
@@ -4582,7 +4806,7 @@ renderers.home = function(root){
     card("ic-book", "Textes de référence", "Articles cités, recherche rapide", "refs"),
     card("ic-quote", "Phrases rituelles", "Les formules fréquentes en audience", "phrases", null, true),
     (state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president") ? card("ic-users", "Administrer ma section", "Outils présidence de section", "admin-section", null, true) : null,
-    state.profile.presidentCph===true ? (
+    state.profile.cphRole==="president" ? (
       isAppOwner()
         ? card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", null, true)
         : card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", h("span",{class:"badge amber"},"Bientôt disponible"), true, true)
@@ -8950,11 +9174,12 @@ renderers["liens-utiles"] = function(root){
     return settings.defaultTimes[t.id] && (settings.defaultTimes[t.id].debut || settings.defaultTimes[t.id].fin);
   });
   /* Revue UI : les 7 fiches institutionnelles du CPH (TJ, Cour d'appel,
-     Bâtonnier, Greffe) n'ont de sens que pour la présidence du CPH — même
-     restriction que sur l'écran Annuaire > Contacts utiles, désormais
-     partagée via CPH_INSTITUTIONAL_CONTACT_KEYS plutôt que dupliquée. */
+     Bâtonnier, Greffe) n'ont de sens que pour la présidence du CPH —
+     président(e) ET vice-président(e), voir isCphOfficer — même restriction
+     que sur l'écran Annuaire > Contacts utiles, désormais partagée via
+     CPH_INSTITUTIONAL_CONTACT_KEYS plutôt que dupliquée. */
   var contactRows = SECTION_SETTINGS_CONTACTS.filter(function(c){
-    if(CPH_INSTITUTIONAL_CONTACT_KEYS.indexOf(c.key)!==-1 && state.profile.presidentCph!==true) return false;
+    if(CPH_INSTITUTIONAL_CONTACT_KEYS.indexOf(c.key)!==-1 && !isCphOfficer(state.profile.cphRole)) return false;
     var f = settings.contacts[c.key];
     return f && (f.prenom || f.nom || f.email || f.tel);
   });
