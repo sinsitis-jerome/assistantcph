@@ -246,6 +246,16 @@
   .section-title:first-child{ margin-top:0; }
   .lede{ font-size:.88rem; color:var(--text-muted); line-height:1.55; margin-bottom:14px; }
 
+  .collapse-header{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    font-family:var(--font-display); font-size:1.05rem; font-weight:600;
+    margin:22px 0 10px; cursor:pointer; user-select:none;
+  }
+  .collapse-header:first-child{ margin-top:0; }
+  .collapse-chevron{ display:inline-block; color:var(--text-muted); font-size:.85rem; transition:transform .15s ease; flex:none; }
+  .collapse-chevron.open{ transform:rotate(180deg); }
+  @media (prefers-reduced-motion: reduce){ .collapse-chevron{ transition:none; } }
+
   .panel{ background:var(--panel); border:1px solid var(--divider); border-radius:var(--radius-lg); padding:14px; }
   .panel + .panel{ margin-top:12px; }
   .stat-row{ display:flex; gap:10px; }
@@ -1810,21 +1820,39 @@ function markSyncDone(){
    modifications concurrentes serait plus ambitieux mais bien plus risqué
    à construire correctement pour un gain incertain.
 
-   Ne se déclenche qu'une fois par session (autoPullAttempted), pour ne
-   jamais multiplier les allers-retours Firestore à chaque écran affiché
-   — appelé à la fois sur l'événement fb-sync-ready (cas normal :
-   ouverture de l'application, déjà synchronisée) et juste après
+   Se déclenchait jusqu'ici une seule fois par session. Demande de
+   l'utilisateur (« les gens vont oublier de synchroniser... un
+   chronomètre qui déclenche une synchro toutes les heures et une
+   synchronisation à chaque changement de page ») : se redéclenche
+   désormais régulièrement — sur l'événement fb-sync-ready (cas normal :
+   ouverture de l'application, déjà synchronisée), juste après
    completeOnboarding (cas d'un tout premier lancement, où
    sync.sectionCode ne devient vrai qu'au terme du parcours d'accueil,
    potentiellement après que fb-sync-ready ait déjà été ignoré une
-   première fois faute de code de section à ce moment-là). */
-var autoPullAttempted = false;
+   première fois faute de code de section à ce moment-là), à chaque
+   navigation (voir l'appel dans go()) et par un minuteur toutes les
+   heures tant que l'application reste ouverte (voir le setInterval
+   après la définition de la fonction, plus bas). Protégé par
+   AUTO_PULL_MIN_GAP_MS pour ne jamais multiplier les allers-retours
+   Firestore si l'utilisateur enchaîne les écrans rapidement — sans
+   risque pour autant, quel que soit le rythme des appels, grâce à la
+   garantie isDirty ci-dessus qui n'écrase jamais une modification locale
+   pas encore envoyée. */
+var lastAutoPullAttemptAt = 0;
+var AUTO_PULL_MIN_GAP_MS = 5*60*1000;   /* au moins 5 min entre deux tentatives déclenchées par la navigation */
+var AUTO_PULL_INTERVAL_MS = 60*60*1000; /* et une tentative systématique toutes les heures, application laissée ouverte */
+var lastFreshnessNoticeRemoteTime = 0;
 function checkRemoteFreshnessOnly(){
   window.__fbFirestore.getSectionMeta(state.sync.sectionCode).then(function(meta){
     if(!meta || !meta.updatedAt) return;
     var remoteTime = new Date(meta.updatedAt).getTime();
     var localTime = state.sync.lastSyncAt ? new Date(state.sync.lastSyncAt).getTime() : 0;
-    if(remoteTime > localTime + 2000){ // marge de 2s pour l'horloge serveur
+    /* Prévient une seule fois par nouvelle version distante (et non à
+       chaque tentative automatique tant qu'elle reste dirty) — évite un
+       toast répété à chaque écran ou chaque heure tant que la présidence
+       n'a pas envoyé sa propre version. */
+    if(remoteTime > localTime + 2000 && remoteTime!==lastFreshnessNoticeRemoteTime){ // marge de 2s pour l'horloge serveur
+      lastFreshnessNoticeRemoteTime = remoteTime;
       toast("Une mise à jour de la section est disponible — Réglages > Synchronisation pour la récupérer.");
     }
   }).catch(function(err){
@@ -1900,11 +1928,12 @@ function notifyMyPlanningChanges(before, after){
   }
 }
 
-function maybeAutoPullSection(){
-  if(autoPullAttempted) return;
+function maybeAutoPullSection(force){
   if(state.sync.revoked) return; // voir applySyncPayloadToState — accès retiré, plus aucun appel réseau
   if(!state.sync.sectionCode || !syncAvailable()) return;
-  autoPullAttempted = true;
+  var now = Date.now();
+  if(!force && now-lastAutoPullAttemptAt < AUTO_PULL_MIN_GAP_MS) return;
+  lastAutoPullAttemptAt = now;
   var localSnapshot = JSON.stringify(syncPayloadFromState());
   var isDirty = state.sync.lastSyncedSnapshot===null || state.sync.lastSyncedSnapshot!==localSnapshot;
   if(isDirty){ checkRemoteFreshnessOnly(); return; }
@@ -1935,6 +1964,14 @@ function maybeAutoPullSection(){
   });
 }
 window.addEventListener("fb-sync-ready", maybeAutoPullSection);
+/* Demande de l'utilisateur (« un chronomètre qui déclenche une synchro
+   toutes les heures ») : filet de sécurité pour qui laisse l'application
+   ouverte sans jamais changer d'écran — voir aussi l'appel dans go(),
+   pour le « à chaque changement de page ». AUTO_PULL_INTERVAL_MS
+   (1 heure) est très supérieur à AUTO_PULL_MIN_GAP_MS : ce minuteur ne
+   se fait donc jamais absorber par le garde-fou anti-rafale des appels
+   déclenchés par la navigation. */
+setInterval(maybeAutoPullSection, AUTO_PULL_INTERVAL_MS);
 
 /* =================================================================
    ADMINISTRATION GÉNÉRALE (rôle "Administrateur")
@@ -3293,6 +3330,13 @@ function go(screenId, replace){
   if(!replace) navStack.push(screenId);
   else navStack[navStack.length-1]=screenId;
   render(screenId);
+  /* Demande de l'utilisateur (« une synchronisation à chaque changement
+     de page ») : tente un rafraîchissement silencieux à chaque
+     navigation, en plus de celui du lancement et du minuteur horaire
+     (voir maybeAutoPullSection) — sans risque grâce à sa propre garantie
+     anti-écrasement, et sans excès grâce à AUTO_PULL_MIN_GAP_MS qui
+     absorbe les navigations rapprochées. */
+  maybeAutoPullSection();
 }
 function goBack(){
   if(navStack.length>1){ navStack.pop(); render(navStack[navStack.length-1]); }
@@ -4146,6 +4190,18 @@ function openCrossSectionMemberPicker(cph, onPick){
    l'actualiser. */
 var annuaireCphState = { status:"idle", entries:null, greffiers:null };
 var annuaireCphFilters = { section:"", college:"" };
+/* Repliés par défaut (demande de l'utilisateur) ; l'état du dépli n'a besoin
+   de vivre que pour la session en cours, comme les filtres ci-dessus. */
+var annuaireCphCollapse = { contacts:true, conseillers:true };
+function collapseSectionHeader(title, key){
+  var collapsed = !!annuaireCphCollapse[key];
+  function toggle(){ annuaireCphCollapse[key] = !annuaireCphCollapse[key]; render("annuaire-cph"); }
+  return h("div", {class:"collapse-header", tabindex:"0", "aria-expanded": collapsed?"false":"true",
+      onclick:toggle, onkeydown:function(e){ if(e.key==="Enter") toggle(); }},
+    h("span", null, title),
+    h("span", {class:"collapse-chevron"+(collapsed?"":" open"), "aria-hidden":"true"}, "▾")
+  );
+}
 function loadAnnuaireCph(force){
   if(annuaireCphState.status==="loading") return;
   if(annuaireCphState.status==="loaded" && !force) return;
@@ -4279,43 +4335,50 @@ renderers["annuaire-cph"] = function(root){
   var sc = state.sectionSettings.contacts;
   var presSection = sectionRoleContact("president");
   var vicePresSection = sectionRoleContact("vice-president");
-  var contactsPanel = h("div", {class:"panel"});
-  contactsPanel.appendChild(contactInfoRow("Greffier de section", ficheName(sc.greffier), sc.greffier));
-  contactsPanel.appendChild(contactInfoRow("Président(e) de section", presSection && presSection.name, presSection));
-  contactsPanel.appendChild(contactInfoRow("Vice-président(e) de section", vicePresSection && vicePresSection.name, vicePresSection));
-  contactsPanel.appendChild(contactInfoRow("Président(e) du CPH", ficheName(sc.presidentCph), sc.presidentCph));
-  contactsPanel.appendChild(contactInfoRow("Vice-président(e) du CPH", ficheName(sc.vicePresidentCph), sc.vicePresidentCph));
-  root.appendChild(h("div", {class:"section-title"}, "Contacts utiles"));
-  root.appendChild(contactsPanel);
+  /* « Contacts utiles » et « Conseillers » sont désormais repliables (repliés
+     par défaut), demande explicite de l'utilisateur une fois le bloc en place
+     — un simple clic/Entrée sur le titre bascule l'affichage, voir
+     collapseSectionHeader ci-dessus (état conservé pour la session, comme
+     les filtres de la liste des conseillers). */
+  root.appendChild(collapseSectionHeader("Contacts utiles", "contacts"));
+  if(!annuaireCphCollapse.contacts){
+    var contactsPanel = h("div", {class:"panel"});
+    contactsPanel.appendChild(contactInfoRow("Greffier de section", ficheName(sc.greffier), sc.greffier));
+    contactsPanel.appendChild(contactInfoRow("Président(e) de section", presSection && presSection.name, presSection));
+    contactsPanel.appendChild(contactInfoRow("Vice-président(e) de section", vicePresSection && vicePresSection.name, vicePresSection));
+    contactsPanel.appendChild(contactInfoRow("Président(e) du CPH", ficheName(sc.presidentCph), sc.presidentCph));
+    contactsPanel.appendChild(contactInfoRow("Vice-président(e) du CPH", ficheName(sc.vicePresidentCph), sc.vicePresidentCph));
+    root.appendChild(contactsPanel);
 
-  if(state.profile.presidentCph===true){
-    var institPanel = h("div", {class:"panel", style:"margin-top:12px"});
-    [
-      {key:"presidentTj", label:"Président(e) du Tribunal judiciaire"},
-      {key:"secretariatTj", label:"Secrétariat du Tribunal judiciaire"},
-      {key:"presidentCourAppel", label:"Président(e) de la Cour d'appel"},
-      {key:"secretariatCourAppel", label:"Secrétariat de la Cour d'appel"},
-      {key:"secretaireGeneralCourAppel", label:"Secrétaire général(e) de la Cour d'appel"},
-      {key:"directeurGreffe", label:"Directeur / Directrice de greffe"},
-      {key:"batonnier", label:"Bâtonnier / Bâtonnière"}
-    ].forEach(function(c){
-      var f = sc[c.key];
-      institPanel.appendChild(contactInfoRow(c.label, ficheName(f), f));
-    });
-    root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Contacts institutionnels du CPH"));
-    root.appendChild(institPanel);
-
-    var greffiers = annuaireCphState.greffiers || [];
-    root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Greffiers de toutes les sections"));
-    var greffiersPanel = h("div", {class:"panel"});
-    if(!greffiers.length){
-      greffiersPanel.appendChild(h("div", {class:"footnote"}, "Aucun greffier de section publié pour l'instant."));
-    } else {
-      greffiers.forEach(function(g){
-        greffiersPanel.appendChild(contactInfoRow(g.section, [g.prenom, g.nom].filter(Boolean).join(" ") || null, g));
+    if(state.profile.presidentCph===true){
+      var institPanel = h("div", {class:"panel", style:"margin-top:12px"});
+      [
+        {key:"presidentTj", label:"Président(e) du Tribunal judiciaire"},
+        {key:"secretariatTj", label:"Secrétariat du Tribunal judiciaire"},
+        {key:"presidentCourAppel", label:"Président(e) de la Cour d'appel"},
+        {key:"secretariatCourAppel", label:"Secrétariat de la Cour d'appel"},
+        {key:"secretaireGeneralCourAppel", label:"Secrétaire général(e) de la Cour d'appel"},
+        {key:"directeurGreffe", label:"Directeur / Directrice de greffe"},
+        {key:"batonnier", label:"Bâtonnier / Bâtonnière"}
+      ].forEach(function(c){
+        var f = sc[c.key];
+        institPanel.appendChild(contactInfoRow(c.label, ficheName(f), f));
       });
+      root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Contacts institutionnels du CPH"));
+      root.appendChild(institPanel);
+
+      var greffiers = annuaireCphState.greffiers || [];
+      root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Greffiers de toutes les sections"));
+      var greffiersPanel = h("div", {class:"panel"});
+      if(!greffiers.length){
+        greffiersPanel.appendChild(h("div", {class:"footnote"}, "Aucun greffier de section publié pour l'instant."));
+      } else {
+        greffiers.forEach(function(g){
+          greffiersPanel.appendChild(contactInfoRow(g.section, [g.prenom, g.nom].filter(Boolean).join(" ") || null, g));
+        });
+      }
+      root.appendChild(greffiersPanel);
     }
-    root.appendChild(greffiersPanel);
   }
 
   var entries = annuaireCphState.entries || [];
@@ -4323,42 +4386,44 @@ renderers["annuaire-cph"] = function(root){
   entries.forEach(function(e){ if(e.section && sectionsPresent.indexOf(e.section)===-1) sectionsPresent.push(e.section); });
   sectionsPresent.sort();
 
-  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Conseillers"));
-  root.appendChild(h("p", {class:"lede"}, "Tous les conseillers de "+(cphLabel(state.profile)||state.profile.cph||"votre CPH")+", toutes sections confondues — liste en lecture seule."));
+  root.appendChild(collapseSectionHeader("Conseillers", "conseillers"));
+  if(!annuaireCphCollapse.conseillers){
+    root.appendChild(h("p", {class:"lede"}, "Tous les conseillers de "+(cphLabel(state.profile)||state.profile.cph||"votre CPH")+", toutes sections confondues — liste en lecture seule."));
 
-  var filterRow = h("div", {class:"btn-row"});
-  filterRow.appendChild(h("select", {onchange:function(e){ annuaireCphFilters.section = e.target.value; render("annuaire-cph"); }},
-    h("option", {value:"", selected: annuaireCphFilters.section?null:"selected"}, "Toutes les sections"),
-    sectionsPresent.map(function(s){ return h("option", {value:s, selected: s===annuaireCphFilters.section?"selected":null}, s); })
-  ));
-  filterRow.appendChild(h("select", {onchange:function(e){ annuaireCphFilters.college = e.target.value; render("annuaire-cph"); }},
-    h("option", {value:"", selected: annuaireCphFilters.college?null:"selected"}, "Tous les collèges"),
-    COLLEGES.map(function(c){ return h("option", {value:c, selected: c===annuaireCphFilters.college?"selected":null}, c); })
-  ));
-  root.appendChild(filterRow);
+    var filterRow = h("div", {class:"btn-row"});
+    filterRow.appendChild(h("select", {onchange:function(e){ annuaireCphFilters.section = e.target.value; render("annuaire-cph"); }},
+      h("option", {value:"", selected: annuaireCphFilters.section?null:"selected"}, "Toutes les sections"),
+      sectionsPresent.map(function(s){ return h("option", {value:s, selected: s===annuaireCphFilters.section?"selected":null}, s); })
+    ));
+    filterRow.appendChild(h("select", {onchange:function(e){ annuaireCphFilters.college = e.target.value; render("annuaire-cph"); }},
+      h("option", {value:"", selected: annuaireCphFilters.college?null:"selected"}, "Tous les collèges"),
+      COLLEGES.map(function(c){ return h("option", {value:c, selected: c===annuaireCphFilters.college?"selected":null}, c); })
+    ));
+    root.appendChild(filterRow);
 
-  var filtered = entries.filter(function(e){
-    return (!annuaireCphFilters.section || e.section===annuaireCphFilters.section)
-      && (!annuaireCphFilters.college || e.college===annuaireCphFilters.college);
-  }).sort(memberSortCompare);
+    var filtered = entries.filter(function(e){
+      return (!annuaireCphFilters.section || e.section===annuaireCphFilters.section)
+        && (!annuaireCphFilters.college || e.college===annuaireCphFilters.college);
+    }).sort(memberSortCompare);
 
-  var list = h("div", {class:"panel", style:"margin-top:12px"});
-  if(!filtered.length){
-    list.appendChild(h("div", {class:"footnote"}, entries.length ? "Aucun conseiller pour ce filtre." : "Aucun conseiller publié pour l'instant."));
-  } else {
-    filtered.forEach(function(m){
-      list.appendChild(h("div", {class:"row-click", tabindex:"0",
-          onclick:function(){ openAnnuaireCphMemberDetail(m); },
-          onkeydown:function(e){ if(e.key==="Enter") openAnnuaireCphMemberDetail(m); }},
-        h("div", {class:"rc-main"},
-          h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
-          h("div", {class:"rc-sub"}, [m.section, m.college].filter(Boolean).join(" — ") || "—")
-        )
-      ));
-    });
+    var list = h("div", {class:"panel", style:"margin-top:12px"});
+    if(!filtered.length){
+      list.appendChild(h("div", {class:"footnote"}, entries.length ? "Aucun conseiller pour ce filtre." : "Aucun conseiller publié pour l'instant."));
+    } else {
+      filtered.forEach(function(m){
+        list.appendChild(h("div", {class:"row-click", tabindex:"0",
+            onclick:function(){ openAnnuaireCphMemberDetail(m); },
+            onkeydown:function(e){ if(e.key==="Enter") openAnnuaireCphMemberDetail(m); }},
+          h("div", {class:"rc-main"},
+            h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
+            h("div", {class:"rc-sub"}, [m.section, m.college].filter(Boolean).join(" — ") || "—")
+          )
+        ));
+      });
+    }
+    root.appendChild(list);
+    root.appendChild(h("div", {class:"footnote", style:"margin-top:10px"}, filtered.length+(filtered.length>1 ? " conseillers" : " conseiller")));
   }
-  root.appendChild(list);
-  root.appendChild(h("div", {class:"footnote", style:"margin-top:10px"}, filtered.length+(filtered.length>1 ? " conseillers" : " conseiller")));
   root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:12px", onclick:function(){ loadAnnuaireCph(true); }}, "Actualiser"));
 };
 
@@ -9308,21 +9373,33 @@ renderers.settings = function(root){
      l'espace de section sont désormais créés en amont (parcours d'accueil
      unifié « Acteur(rice) de section »), donc plus besoin ici de créer un
      espace, rejoindre avec un code, consulter le code de section, ou
-     désactiver la synchronisation — seule l'action de rafraîchir les
-     données reste utile au quotidien pour un(e) simple conseiller(e).
+     désactiver la synchronisation.
+     Demande ultérieure (« les gens vont oublier de synchroniser ») : la
+     récupération devient elle-même automatique et silencieuse — au
+     lancement, à chaque changement d'écran, et au moins une fois par
+     heure tant que l'application reste ouverte (voir
+     maybeAutoPullSection). Le bouton de récupération manuelle n'est donc
+     plus indispensable au quotidien, mais reste en secours pour forcer
+     une vérification immédiate sans attendre le prochain déclenchement
+     automatique.
      Président(e) et vice-président(e) éditent leur répertoire et leur
      planning localement (voir « Administrer ma section » →
      répertoire/planification), mais ces modifications sont désormais
      envoyées automatiquement quelques secondes après chaque changement
-     (scheduleSectionAutoPush, appelée à chaque point de saisie) —
-     « Envoyer mes modifications » n'est plus indispensable, mais reste
-     ici en secours pour forcer un envoi immédiat (par ex. juste avant de
-     fermer l'appareil) ou relancer l'envoi après une coupure réseau. */
+     (scheduleSectionAutoPush, appelée à chaque point de saisie) — comme,
+     côté simple conseiller(e), un échange d'audience demandé depuis
+     « Mon planning » (voir performExchange), qui repart lui aussi tout
+     seul vers la section dès l'échange confirmé. « Envoyer mes
+     modifications » n'est plus indispensable non plus pour la
+     présidence, mais reste ici en secours pour forcer un envoi immédiat
+     (par ex. juste avant de fermer l'appareil) ou relancer l'envoi après
+     une coupure réseau. */
   var syncPanel = h("div", {class:"panel"});
-  syncPanel.appendChild(h("button", {class:"sheet-btn accent", onclick:function(){ confirmAndPullSection(); }}, "Synchroniser les données"));
+  syncPanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){ confirmAndPullSection(); }}, "Forcer une vérification maintenant"));
   if(state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president"){
     syncPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:pushToSectionNow}, "Envoyer mes modifications maintenant"));
   }
+  syncPanel.appendChild(h("p", {class:"footnote", style:"margin-top:10px; margin-bottom:0"}, "Vos données se synchronisent désormais automatiquement (à l’ouverture, à chaque écran et au moins une fois par heure) — vous n’avez normalement rien à faire ici."));
   root.appendChild(syncPanel);
 
   root.appendChild(h("div", {class:"section-title"}, "Espace administrateur"));
@@ -9339,7 +9416,7 @@ window.__cph = { h:h, icon:icon, clear:clear, toast:toast, openSheet:openSheet, 
   state:state, saveState:saveState, go:go, goBack:goBack, render:render, renderers:renderers,
   NATURES:NATURES, SECTIONS:SECTIONS, DURATIONS:DURATIONS, REF_TEXTS:REF_TEXTS, PHRASES:PHRASES,
   BJ_STEPS:BJ_STEPS, BCO_STEPS:BCO_STEPS, uid:uid, todayISO:todayISO, saveFile:saveFile, downloadsReady:downloadsReady,
-  applyTheme:applyTheme };
+  applyTheme:applyTheme, maybeAutoPullSection:maybeAutoPullSection };
 
 render(navStack[navStack.length-1]);
 
