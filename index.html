@@ -4782,8 +4782,10 @@ function propagateCphGreffiersToAllSections(cph, greffiersValue, onDone){
 var annuaireCphState = { status:"idle", entries:null };
 var annuaireCphFilters = { section:"", college:"" };
 /* Repliés par défaut (demande de l'utilisateur) ; l'état du dépli n'a besoin
-   de vivre que pour la session en cours, comme les filtres ci-dessus. */
-var annuaireCphCollapse = { contacts:true, conseillers:true };
+   de vivre que pour la session en cours, comme les filtres ci-dessus. Ordre
+   d'affichage voulu par l'utilisateur : Contacts utiles, Greffiers, Contacts
+   institutionnels, Conseillers (voir renderers["annuaire-cph"]). */
+var annuaireCphCollapse = { contacts:true, greffiers:true, institutionnels:true, conseillers:true };
 function collapseSectionHeader(title, key){
   var collapsed = !!annuaireCphCollapse[key];
   function toggle(){ annuaireCphCollapse[key] = !annuaireCphCollapse[key]; render("annuaire-cph"); }
@@ -4935,11 +4937,18 @@ renderers["annuaire-cph"] = function(root){
      de ce bloc commun (échange avec l'utilisateur : choix explicite
      "Tout le monde", les vacations concernant chaque conseiller). */
   var vacationsResponsable = cphGreffiers.filter(function(g){ return g.vacationsResponsable; })[0] || null;
-  /* « Contacts utiles » et « Conseillers » sont désormais repliables (repliés
-     par défaut), demande explicite de l'utilisateur une fois le bloc en place
-     — un simple clic/Entrée sur le titre bascule l'affichage, voir
-     collapseSectionHeader ci-dessus (état conservé pour la session, comme
-     les filtres de la liste des conseillers). */
+  /* « Contacts utiles », « Greffiers », « Contacts institutionnels » et
+     « Conseillers » sont chacun des blocs repliables indépendants (repliés
+     par défaut), dans cet ordre précis — demande explicite de l'utilisateur :
+     initialement seuls « Contacts utiles » et « Conseillers » l'étaient,
+     « Contacts institutionnels du CPH » et « Greffiers de toutes les
+     sections » restant toujours dépliés sous « Contacts utiles » dès que la
+     personne avait les droits pour les voir ; l'utilisateur a demandé que ces
+     deux derniers deviennent eux aussi des titres déployables au même titre
+     que les deux premiers, et a fixé l'ordre : Contacts utiles, Greffiers,
+     Contacts institutionnels, Conseillers. Un simple clic/Entrée sur le titre
+     bascule l'affichage, voir collapseSectionHeader ci-dessus (état conservé
+     pour la session, comme les filtres de la liste des conseillers). */
   root.appendChild(collapseSectionHeader("Contacts utiles", "contacts"));
   if(!annuaireCphCollapse.contacts){
     var contactsPanel = h("div", {class:"panel"});
@@ -4956,38 +4965,26 @@ renderers["annuaire-cph"] = function(root){
     contactsPanel.appendChild(contactInfoRow("Président(e) du CPH", ficheName(sc.presidentCph), sc.presidentCph));
     contactsPanel.appendChild(contactInfoRow("Vice-président(e) du CPH", ficheName(sc.vicePresidentCph), sc.vicePresidentCph));
     root.appendChild(contactsPanel);
+  }
 
-    /* Réservé à la présidence du CPH — président(e) ET vice-président(e),
-       qui voient tous deux exactement les mêmes contacts (voir échange avec
-       l'utilisateur : seules la fiche d'identité et le collège distinguent
-       réellement les deux fonctions, jamais cette visibilité). */
-    if(isCphOfficer(state.profile.cphRole)){
-      var institPanel = h("div", {class:"panel", style:"margin-top:12px"});
-      /* Dérivé de CPH_INSTITUTIONAL_CONTACT_KEYS (+ le libellé associé dans
-         SECTION_SETTINGS_CONTACTS) plutôt qu'une liste à part, désormais
-         qu'une troisième liste (le filtre de renderers["liens-utiles"]
-         partage déjà CPH_INSTITUTIONAL_CONTACT_KEYS) risquerait de diverger
-         silencieusement d'une nouvelle fiche institutionnelle ajoutée à
-         l'une sans l'autre (voir Procureur de la République / adjoint). */
-      CPH_INSTITUTIONAL_CONTACT_KEYS.forEach(function(key){
-        var c = SECTION_SETTINGS_CONTACTS.filter(function(sc0){ return sc0.key===key; })[0];
-        if(!c) return;
-        var f = sc[key];
-        institPanel.appendChild(contactInfoRow(c.label, ficheName(f), f));
-      });
-      root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Contacts institutionnels du CPH"));
-      root.appendChild(institPanel);
-
-      /* Greffiers de TOUT le CPH — lus directement depuis
-         state.sectionSettings.cphGreffiers (la liste partagée, propagée
-         identique à toutes les sections, voir defaultSectionSettings) :
-         plus besoin de l'annuaire partagé du CPH ni d'un chargement séparé
-         pour ce bloc, déjà disponible dès la simple synchronisation de
-         section — simplification par rapport à l'ancien mécanisme (fiche
-         "Greffier de section" republiée section par section dans
-         cphDirectory), qui souffrait du même piège que documenté ailleurs
-         (« Activer sans Enregistrer et synchroniser »). */
-      root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Greffiers de toutes les sections"));
+  /* Réservé à la présidence du CPH — président(e) ET vice-président(e),
+     qui voient tous deux exactement les mêmes contacts (voir échange avec
+     l'utilisateur : seules la fiche d'identité et le collège distinguent
+     réellement les deux fonctions, jamais cette visibilité). Le titre
+     lui-même (donc la possibilité de savoir que ces blocs existent) reste
+     conditionné à ce droit, pas seulement leur contenu déplié. */
+  if(isCphOfficer(state.profile.cphRole)){
+    /* Greffiers de TOUT le CPH — lus directement depuis
+       state.sectionSettings.cphGreffiers (la liste partagée, propagée
+       identique à toutes les sections, voir defaultSectionSettings) :
+       plus besoin de l'annuaire partagé du CPH ni d'un chargement séparé
+       pour ce bloc, déjà disponible dès la simple synchronisation de
+       section — simplification par rapport à l'ancien mécanisme (fiche
+       "Greffier de section" republiée section par section dans
+       cphDirectory), qui souffrait du même piège que documenté ailleurs
+       (« Activer sans Enregistrer et synchroniser »). */
+    root.appendChild(collapseSectionHeader("Greffiers de toutes les sections", "greffiers"));
+    if(!annuaireCphCollapse.greffiers){
       var greffiersPanel = h("div", {class:"panel"});
       if(!cphGreffiers.length){
         greffiersPanel.appendChild(h("div", {class:"footnote"}, "Aucun greffier enregistré pour l'instant — voir Paramètres de la section (espace administrateur) > Greffiers du CPH."));
@@ -4999,6 +4996,24 @@ renderers["annuaire-cph"] = function(root){
         });
       }
       root.appendChild(greffiersPanel);
+    }
+
+    /* Dérivé de CPH_INSTITUTIONAL_CONTACT_KEYS (+ le libellé associé dans
+       SECTION_SETTINGS_CONTACTS) plutôt qu'une liste à part, désormais
+       qu'une troisième liste (le filtre de renderers["liens-utiles"]
+       partage déjà CPH_INSTITUTIONAL_CONTACT_KEYS) risquerait de diverger
+       silencieusement d'une nouvelle fiche institutionnelle ajoutée à
+       l'une sans l'autre (voir Procureur de la République / adjoint). */
+    root.appendChild(collapseSectionHeader("Contacts institutionnels du CPH", "institutionnels"));
+    if(!annuaireCphCollapse.institutionnels){
+      var institPanel = h("div", {class:"panel"});
+      CPH_INSTITUTIONAL_CONTACT_KEYS.forEach(function(key){
+        var c = SECTION_SETTINGS_CONTACTS.filter(function(sc0){ return sc0.key===key; })[0];
+        if(!c) return;
+        var f = sc[key];
+        institPanel.appendChild(contactInfoRow(c.label, ficheName(f), f));
+      });
+      root.appendChild(institPanel);
     }
   }
 
