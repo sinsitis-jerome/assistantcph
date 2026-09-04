@@ -1253,7 +1253,27 @@ var DEFAULT_STATE = {
      sectionMembers/planning), seul le hachage voyage entre appareils via
      sectionMembers[].pinHash. Clé = id du conseiller, valeur = code en
      clair, uniquement pour que le président puisse le consulter/retransmettre. */
-  localMemberPins:{}
+  localMemberPins:{},
+  /* Accès GREFFIER (voir module ACCÈS GREFFIER plus bas) : entièrement
+     séparé de state.profile/state.sync ci-dessus, qui représentent
+     l'identité d'un conseiller — un même appareil pourrait en théorie
+     porter les deux, sans jamais se marcher dessus. "code" est le long
+     jeton aléatoire (128 bits, comme un code de section) transmis UNE
+     SEULE FOIS par l'administrateur ; une fois saisi ici, il reste sur cet
+     appareil comme le code de section d'un conseiller. sections est
+     l'instantané, déjà résolu et prêt à l'emploi, des sections affectées à
+     ce greffier au moment de la génération/mise à jour de son accès
+     (voir buildGreffierAccessBundle côté administrateur) : [{name,
+     sectionCode}, ...] — jamais transmis en clair ailleurs que dans ce
+     document dédié (greffierAccess/{code}), chiffré avec une clé dérivée
+     du code lui-même, jamais lisible par un simple conseiller (voir
+     defaultSectionSettings : cphGreffiers, lui, reste volontairement sans
+     code d'accès — seulement les coordonnées déjà publiques dans
+     l'Annuaire). pinHash confirme l'identité lors de la liaison initiale,
+     exactement comme le code personnel d'un conseiller (même limite
+     assumée : ne protège qu'un mauvais clic, pas un attaquant déterminé —
+     la vraie protection vient du code long ci-dessus). */
+  greffierAccess:{ code:"", greffierName:"", sections:[], linkedAt:null }
 };
 
 function migrate(parsed){
@@ -1497,6 +1517,15 @@ function migrate(parsed){
         if(typeof parsed.localMemberPins[k]==="string" && /^\d{4}$/.test(parsed.localMemberPins[k])) s.localMemberPins[k] = parsed.localMemberPins[k];
       });
     }
+    if(parsed.greffierAccess && typeof parsed.greffierAccess==="object"){
+      var ga = parsed.greffierAccess;
+      s.greffierAccess.code = typeof ga.code==="string" ? ga.code : "";
+      s.greffierAccess.greffierName = typeof ga.greffierName==="string" ? ga.greffierName : "";
+      s.greffierAccess.linkedAt = typeof ga.linkedAt==="string" ? ga.linkedAt : null;
+      s.greffierAccess.sections = Array.isArray(ga.sections) ? ga.sections.filter(function(x){
+        return x && typeof x==="object" && typeof x.name==="string" && typeof x.sectionCode==="string";
+      }).map(function(x){ return {name:x.name, sectionCode:x.sectionCode}; }) : [];
+    }
     /* migrate() n'est appelé que lorsqu'un état existait déjà en local
        (voir loadState) : une installation qui date d'avant le parcours
        d'accueil ne doit jamais se voir imposer rétroactivement l'écran
@@ -1692,6 +1721,102 @@ function decryptCphDirectoryEntry(cphDirectoryCode, envelope){
     });
   });
 }
+
+/* =================================================================
+   ACCÈS GREFFIER (lecture seule, plusieurs sections à la fois)
+   ------------------------------------------------------------------
+   Demande de l'utilisateur : donner à chaque greffier (voir cphGreffiers,
+   plus haut dans defaultSectionSettings) un accès à l'application, mais en
+   lecture seule et limité aux SECTIONS qui lui sont affectées — le
+   planning de chacune (avec téléchargement JPEG) et la liste de ses
+   conseillers.
+
+   Pourquoi ce n'est PAS un simple code à 4 chiffres : un conseiller normal
+   se sert de son code à 4 chiffres UNIQUEMENT pour confirmer, après coup,
+   quelle fiche est la sienne parmi celles déjà lisibles avec le code de
+   SECTION (long, 128 bits) qu'il détient déjà — casser ce code à 4
+   chiffres ne donne accès à AUCUNE donnée supplémentaire. Un greffier,
+   lui, a besoin d'un accès à plusieurs sections à la fois : il n'existe
+   dans l'application aucun "code" qui donne aujourd'hui un accès en
+   lecture à plus d'une section. Faire reposer cet accès sur un simple code
+   à 4 chiffres (10 000 combinaisons, cassable par force brute hors ligne
+   contre un document dont l'identifiant est déterministe donc devinable —
+   voir plus bas) aurait donc, pour la première fois, fait de ce code
+   faible la clé réelle de plannings et annuaires entiers. Voir échange
+   avec l'utilisateur : retenu à la place le même schéma en deux temps
+   qu'un conseiller ordinaire — un long code, généré par l'administrateur
+   et transmis UNE SEULE FOIS (comme un code de section), donnant accès à
+   un petit "bundle" listant les sections affectées et LEUR PROPRE code de
+   section (résolus une fois pour toutes par l'administrateur via
+   lookupAdminRegistry, voir buildGreffierAccessBundle plus bas) ; un code
+   personnel à 4 chiffres vient ensuite, exactement comme pour un
+   conseiller, uniquement confirmer l'identité au moment de cette liaison
+   initiale — jamais une clé de déchiffrement de quoi que ce soit.
+
+   Le document greffierAccess/{code} est chiffré avec une clé dérivée de ce
+   code long lui-même (déjà l'identifiant du document, exactement comme
+   sections/{sectionCode}) : le connaître suffit et est nécessaire pour le
+   déchiffrer, aucun autre secret n'entre en jeu. Le bundle qu'il contient
+   est un INSTANTANÉ, pas une référence live : si les sections affectées à
+   ce greffier changent, ou si le code d'une section est régénéré après
+   coup, il faut rouvrir sa fiche (« Greffiers du CPH ») et cliquer sur
+   « Mettre à jour l'accès » pour republier un bundle à jour SOUS LE MÊME
+   code — voir openAdminGreffierForm — le greffier n'a alors jamais besoin
+   de ressaisir quoi que ce soit : sa prochaine visite récupère
+   automatiquement le bundle à jour depuis ce même document. */
+var GREFFIER_ACCESS_HKDF_INFO = "cph-toolbox-greffier-access-v1";
+
+function deriveGreffierAccessKey(accessCode){
+  var codeBytes = syncBase64UrlToBytes(accessCode);
+  return crypto.subtle.importKey("raw", codeBytes, "HKDF", false, ["deriveKey"]).then(function(ikm){
+    return crypto.subtle.deriveKey(
+      { name:"HKDF", hash:"SHA-256", salt:new Uint8Array(0), info:new TextEncoder().encode(GREFFIER_ACCESS_HKDF_INFO) },
+      ikm,
+      { name:"AES-GCM", length:256 },
+      false,
+      ["encrypt","decrypt"]
+    );
+  });
+}
+function encryptGreffierAccessBundle(accessCode, bundleObj){
+  return deriveGreffierAccessKey(accessCode).then(function(key){
+    var iv = new Uint8Array(12);
+    crypto.getRandomValues(iv);
+    var plaintext = new TextEncoder().encode(JSON.stringify(bundleObj));
+    return crypto.subtle.encrypt({name:"AES-GCM", iv:iv}, key, plaintext).then(function(cipherBuf){
+      return { iv: syncBytesToBase64Url(iv), ciphertext: syncBytesToBase64Url(new Uint8Array(cipherBuf)) };
+    });
+  });
+}
+function decryptGreffierAccessBundle(accessCode, envelope){
+  return deriveGreffierAccessKey(accessCode).then(function(key){
+    var iv = syncBase64UrlToBytes(envelope.iv);
+    var cipherBytes = syncBase64UrlToBytes(envelope.ciphertext);
+    return crypto.subtle.decrypt({name:"AES-GCM", iv:iv}, key, cipherBytes).then(function(plainBuf){
+      return JSON.parse(new TextDecoder().decode(plainBuf));
+    });
+  });
+}
+/* Récupère et déchiffre le bundle d'un code d'accès greffier — résout
+   `null` si aucun document n'existe pour ce code (code mal recopié). Même
+   principe que pullSectionSync. */
+function pullGreffierAccess(accessCode){
+  if(!syncAvailable()) return Promise.reject(new Error("sync-unavailable"));
+  return window.__fbFirestore.getGreffierAccessDoc(accessCode).then(function(doc){
+    if(!doc) return null;
+    return decryptGreffierAccessBundle(accessCode, {iv:doc.iv, ciphertext:doc.ciphertext});
+  });
+}
+/* Chiffre puis (re)publie le bundle d'un greffier SOUS LE MÊME code —
+   utilisée à la fois pour la toute première génération et pour une mise à
+   jour ultérieure (voir openAdminGreffierForm). */
+function pushGreffierAccess(accessCode, bundleObj){
+  if(!syncAvailable()) return Promise.reject(new Error("sync-unavailable"));
+  return encryptGreffierAccessBundle(accessCode, bundleObj).then(function(envelope){
+    return window.__fbFirestore.setGreffierAccessDoc(accessCode, { iv: envelope.iv, ciphertext: envelope.ciphertext });
+  });
+}
+
 /* Champs publiés dans l'annuaire partagé du CPH : prénom/nom/collège
    depuis l'origine (choix délibérément conservateur au lancement de
    cette fonctionnalité, l'utilisateur n'ayant alors exprimé aucune
@@ -2215,6 +2340,13 @@ var adminBuffer = null; // section actuellement ouverte dans l'espace administra
    sans avoir à le régénérer aussitôt pour le consulter (voir
    openAdminMemberForm). */
 var adminMemberPins = {};
+/* Même coffre générique (adminPins), même clé dérivée du code
+   administrateur, mais sous la section réservée "__greffiers__" (jamais un
+   nom de section réel, voir SECTIONS) : garde les codes d'accès LONGS des
+   greffiers déjà générés/vus par l'administrateur, retrouvables sans
+   régénération — voir openAdminGreffierForm et loadPersistedAdminPins. Clé
+   = id du greffier (cphGreffiers[].id), valeur = code d'accès en clair. */
+var adminGreffierPins = {};
 
 function hashAdminCode(code){
   var data = new TextEncoder().encode("admin-code|"+code);
@@ -2376,8 +2508,12 @@ function persistAdminPins(cph, section, updates){
 }
 /* Recharge le coffre d'une section dans adminMemberPins (sans écraser un
    code déjà en mémoire pour la session en cours, par prudence — voir
-   openAdminSection). Best-effort, même logique que persistAdminPins. */
-function loadPersistedAdminPins(cph, section){
+   openAdminSection). Best-effort, même logique que persistAdminPins.
+   targetMap (facultatif, adminMemberPins par défaut) : le coffre des
+   greffiers (adminGreffierPins) réutilise cette même fonction, avec la
+   section réservée "__greffiers__" — voir openAdminGreffierForm. */
+function loadPersistedAdminPins(cph, section, targetMap){
+  targetMap = targetMap || adminMemberPins;
   if(!adminPinsBridgeAvailable() || !adminSessionCode) return Promise.resolve();
   try{
     var registryId = registryIdFor(cph, section);
@@ -2385,7 +2521,7 @@ function loadPersistedAdminPins(cph, section){
       return decryptAdminPinsBlob(adminSessionCode, doc);
     }).then(function(pins){
       Object.keys(pins || {}).forEach(function(id){
-        if(!(id in adminMemberPins)) adminMemberPins[id] = pins[id];
+        if(!(id in targetMap)) targetMap[id] = pins[id];
       });
     }).catch(function(){});
   }catch(e){ return Promise.resolve(); }
@@ -2653,6 +2789,10 @@ function openAdminSection(cph, section, sectionCode){
      cette section (générés lors d'une session précédente) — voir Codes
      personnels retrouvables sans régénération plus haut. */
   loadPersistedAdminPins(cph, section);
+  /* Coffre des codes d'accès greffier (voir ACCÈS GREFFIER) : CPH-wide,
+     pas propre à cette section — mais rechargé ici tout de même, au même
+     moment, pour être déjà prêt dès l'ouverture de « Greffiers du CPH ». */
+  loadPersistedAdminPins(cph, "__greffiers__", adminGreffierPins);
 }
 function refreshAdminBuffer(){
   if(!adminBuffer) return;
@@ -3564,7 +3704,14 @@ applyTheme();
 /* Écran de démarrage : "onboarding" (Qui êtes-vous ?) pour un premier
    lancement réel, "home" pour toute installation déjà initialisée — voir
    DEFAULT_STATE.onboarding et migrate(). */
-var navStack = (state.onboarding && !state.onboarding.done) ? ["onboarding"] : ["home"];
+/* state.greffierAccess (voir ESPACE GREFFIER plus bas) prime sur
+   onboarding.done : un appareil lié en tant que greffier atterrit
+   directement sur son espace dédié, jamais sur l'accueil "Qui êtes-vous ?"
+   ni sur celui d'un conseiller — littéral "greffier-home" plutôt que la
+   constante GREFFIER_HOME_SCREEN, déclarée plus bas dans le fichier (pas
+   encore affectée à ce stade de l'exécution). */
+var navStack = (state.greffierAccess && state.greffierAccess.code) ? ["greffier-home"]
+  : (state.onboarding && !state.onboarding.done) ? ["onboarding"] : ["home"];
 var SCREEN_TITLES = {
   home:"Mon Assistant CPH", onboarding:"Bienvenue", vacations:"Feuille de vacation", bj:"Présider un BJ",
   bco:"Présider un BCO", refs:"Textes de référence", phrases:"Phrases rituelles", settings:"Réglages",
@@ -3575,7 +3722,8 @@ var SCREEN_TITLES = {
   "sysadmin-panel":"Espace administrateur", "sysadmin-section":"Section administrée",
   "sysadmin-section-members":"Liste de la section", "sysadmin-section-planning":"Planning de la section",
   "sysadmin-section-settings":"Paramètres de la section", "sysadmin-cph-greffiers":"Greffiers du CPH",
-  "onboarding-activite":"Bienvenue", "onboarding-signature":"Bienvenue"
+  "onboarding-activite":"Bienvenue", "onboarding-signature":"Bienvenue",
+  "greffier-home":"Espace greffier", "greffier-section":"Section"
 };
 /* Écrans du parcours d'accueil : ni bouton retour ni icône Réglages tant
    qu'on y est (voir render() plus bas) — un conseiller ne doit pas
@@ -3583,6 +3731,14 @@ var SCREEN_TITLES = {
    sautant directement sur un autre écran (même logique déjà appliquée à
    "onboarding" lui-même). */
 var ONBOARDING_SCREENS = ["onboarding", "onboarding-activite", "onboarding-signature"];
+/* Écran d'accueil de l'espace GREFFIER (voir ACCÈS GREFFIER) : même
+   traitement que "home" dans render() ci-dessous (ni bouton retour ni
+   icône Réglages) — un greffier n'a pas de profil de conseiller, donc rien
+   à régler dans l'écran Réglages habituel ; se déconnecter de cet espace
+   se fait directement depuis cet écran (voir renderers["greffier-home"]).
+   "greffier-section" (sous-écran d'une section précise), lui, garde
+   volontairement le bouton retour, comme n'importe quel autre écran. */
+var GREFFIER_HOME_SCREEN = "greffier-home";
 var renderers = {};
 
 function go(screenId, replace){
@@ -3639,12 +3795,15 @@ function renderRevokedLock(){
 function render(screenId){
   if(state.sync.revoked){ renderRevokedLock(); return; }
   document.getElementById("tb-title").textContent = SCREEN_TITLES[screenId] || "";
-  document.getElementById("btn-back").style.display = (screenId==="home"||ONBOARDING_SCREENS.indexOf(screenId)!==-1) ? "none" : "flex";
+  document.getElementById("btn-back").style.display = (screenId==="home"||screenId===GREFFIER_HOME_SCREEN||ONBOARDING_SCREENS.indexOf(screenId)!==-1) ? "none" : "flex";
   /* Pendant tout le parcours d'accueil (y compris l'activité salariée et la
      signature, obligatoires — voir ONBOARDING_SCREENS), l'icône Réglages
      reste masquée : on évite qu'un conseiller la contourne en tapant
-     directement dessus avant d'avoir terminé. */
-  document.getElementById("btn-settings").style.display = ONBOARDING_SCREENS.indexOf(screenId)!==-1 ? "none" : "flex";
+     directement dessus avant d'avoir terminé. Également masquée sur tout
+     l'espace GREFFIER (voir GREFFIER_HOME_SCREEN ci-dessus) : un greffier
+     n'a pas de profil de conseiller, rien à y régler — se déconnecter se
+     fait directement depuis renderers["greffier-home"]. */
+  document.getElementById("btn-settings").style.display = (ONBOARDING_SCREENS.indexOf(screenId)!==-1 || screenId===GREFFIER_HOME_SCREEN || screenId==="greffier-section") ? "none" : "flex";
   var main = document.getElementById("main");
   clear(main);
   var screen = h("div", {class:"screen active", id:"screen-"+screenId});
@@ -3782,10 +3941,226 @@ renderers.onboarding = function(root){
       openAdminCodeGateSheet(function(){
         completeOnboarding("admin", "sysadmin-panel");
       });
+    }),
+    roleCard("ic-book", "Greffier(ère)", "Accès en lecture seule au planning et à l'annuaire de vos sections — avec le code reçu de l'administrateur", function(){
+      openGreffierJoinSheet();
     })
   );
   wrap.appendChild(grid);
   root.appendChild(wrap);
+};
+
+/* =================================================================
+   ESPACE GREFFIER (lecture seule, plusieurs sections à la fois)
+   ------------------------------------------------------------------
+   Voir ACCÈS GREFFIER (module de chiffrement, plus haut) pour le modèle de
+   sécurité. Entièrement séparé du reste de l'application : ni
+   state.profile, ni state.sync, ni state.sectionMembers/state.planning ne
+   sont jamais touchés ici (state.greffierAccess est son propre petit
+   espace, voir DEFAULT_STATE) — un appareil pourrait en théorie porter à
+   la fois un profil de conseiller ET un accès greffier sans que l'un ne
+   perturbe l'autre, même si le cas d'usage réel est plutôt un appareil
+   dédié au greffier.
+
+   greffierSectionCache (volontairement HORS de state, comme
+   annuaireCphState pour l'annuaire partagé du CPH) : le planning et
+   l'annuaire de chaque section affectée sont rechargés à chaque visite
+   plutôt que persistés localement — l'usage attendu (consultation
+   ponctuelle, en ligne) ne justifie pas la complexité d'une synchronisation
+   bidirectionnelle façon state.sync, réservée aux acteurs de section. */
+var greffierSectionCache = {};
+var greffierCurrentSection = null;
+
+function openGreffierJoinSheet(){
+  if(!syncAvailable()){ toast("Synchronisation indisponible pour le moment (vérifiez votre connexion)."); return; }
+  var codeInput = h("input", {type:"text", placeholder:"Collez le code reçu", style:"font-family:monospace"});
+  var btn;
+  openSheet("Accès greffier", h("div", null,
+    h("p", {class:"lede"}, "Collez ici le code d'accès transmis par l'administrateur. Vous aurez accès, en lecture seule, au planning (avec téléchargement JPEG) et à la liste des conseillers des sections qui vous sont affectées."),
+    codeInput,
+    btn = h("button", {class:"sheet-btn accent", style:"margin-top:12px", onclick:function(){
+      var code = codeInput.value.trim();
+      if(!code){ toast("Merci de saisir un code."); return; }
+      btn.disabled = true;
+      pullGreffierAccess(code).then(function(bundle){
+        btn.disabled = false;
+        if(!bundle){ toast("Aucun accès trouvé pour ce code — vérifiez qu'il est correctement recopié."); return; }
+        state.greffierAccess = {
+          code: code,
+          greffierName: (bundle && bundle.greffierName) || "",
+          sections: (bundle && Array.isArray(bundle.sections)) ? bundle.sections : [],
+          linkedAt: new Date().toISOString()
+        };
+        greffierSectionCache = {};
+        saveState();
+        closeSheet();
+        toast("Accès greffier activé.");
+        navStack = [GREFFIER_HOME_SCREEN];
+        render(GREFFIER_HOME_SCREEN);
+      }).catch(function(){
+        btn.disabled = false;
+        toast("Échec de la récupération — vérifiez votre connexion, puis réessayez.");
+      });
+    }}, "Rejoindre"),
+    h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler")
+  ));
+}
+
+/* Quitte l'espace greffier sur CET appareil (voir échange avec
+   l'utilisateur : symétrique de « Quitter l'espace administrateur »,
+   mais ici ça efface bien state.greffierAccess — contrairement à l'espace
+   administrateur, l'accès greffier N'EST PAS un simple code de session en
+   mémoire vive, il est persisté comme un code de section de conseiller). */
+function openGreffierUnlinkConfirm(){
+  openSheet("Se déconnecter de l'espace greffier", h("div", null,
+    h("p", {class:"lede"}, "Le code d'accès sera oublié sur cet appareil. Il restera valable ailleurs (ou pourra être recollé ici plus tard) : rien n'est révoqué côté administrateur."),
+    h("button", {class:"sheet-btn danger", onclick:function(){
+      state.greffierAccess = clone(DEFAULT_STATE.greffierAccess);
+      greffierSectionCache = {};
+      saveState();
+      closeSheet();
+      navStack = ["onboarding"];
+      render("onboarding");
+    }}, "Se déconnecter"),
+    h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler")
+  ));
+}
+
+renderers[GREFFIER_HOME_SCREEN] = function(root){
+  if(!state.greffierAccess || !state.greffierAccess.code){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Aucun accès greffier configuré sur cet appareil.")));
+    return;
+  }
+  var wrap = h("div", {class:"home-wrap"});
+  wrap.appendChild(h("div", {class:"hero"},
+    h("div", {class:"eyebrow"}, "Espace greffier"),
+    h("h1", null, "Bonjour"+(state.greffierAccess.greffierName ? " "+state.greffierAccess.greffierName : "")),
+    h("p", {class:"lede", style:"margin-top:4px"}, "Consultation en lecture seule du planning et de l'annuaire de vos sections.")
+  ));
+
+  var sections = state.greffierAccess.sections || [];
+  if(!sections.length){
+    wrap.appendChild(h("p", {class:"footnote"}, "Aucune section affectée pour l'instant — contactez l'administrateur."));
+  } else {
+    var list = h("div", {class:"panel"});
+    sections.forEach(function(s){
+      list.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){ openGreffierSection(s); },
+          onkeydown:function(e){ if(e.key==="Enter") openGreffierSection(s); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, s.name),
+          h("div", {class:"rc-sub"}, "Planning et annuaire")
+        ),
+        icon("ic-chev", "chev")
+      ));
+    });
+    wrap.appendChild(list);
+  }
+
+  wrap.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:18px", onclick:function(){
+    toast("Actualisation de l'accès…");
+    pullGreffierAccess(state.greffierAccess.code).then(function(bundle){
+      if(!bundle){ toast("Cet accès n'est plus valable — contactez l'administrateur."); return; }
+      state.greffierAccess.greffierName = (bundle && bundle.greffierName) || "";
+      state.greffierAccess.sections = (bundle && Array.isArray(bundle.sections)) ? bundle.sections : [];
+      greffierSectionCache = {};
+      saveState();
+      toast("Accès à jour.");
+      render(GREFFIER_HOME_SCREEN);
+    }).catch(function(){ toast("Échec de l'actualisation — vérifiez votre connexion."); });
+  }}, "Actualiser mes sections"));
+  wrap.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:openGreffierUnlinkConfirm}, "Se déconnecter de l'espace greffier"));
+
+  root.appendChild(wrap);
+};
+
+function openGreffierSection(sectionEntry){
+  greffierCurrentSection = sectionEntry;
+  go("greffier-section");
+  loadGreffierSection(sectionEntry, false);
+}
+function loadGreffierSection(sectionEntry, force){
+  var cached = greffierSectionCache[sectionEntry.name];
+  if(cached && cached.status==="loaded" && !force) return;
+  greffierSectionCache[sectionEntry.name] = { status:"loading", members:[], planning:[] };
+  pullSectionSync(sectionEntry.sectionCode).then(function(result){
+    var payload = (result && result.payload) || {};
+    greffierSectionCache[sectionEntry.name] = {
+      status: "loaded",
+      members: Array.isArray(payload.sectionMembers) ? payload.sectionMembers : [],
+      planning: Array.isArray(payload.planning) ? payload.planning : []
+    };
+    if(greffierCurrentSection && greffierCurrentSection.name===sectionEntry.name) render("greffier-section");
+  }).catch(function(){
+    greffierSectionCache[sectionEntry.name] = { status:"error", members:[], planning:[] };
+    if(greffierCurrentSection && greffierCurrentSection.name===sectionEntry.name) render("greffier-section");
+  });
+}
+
+renderers["greffier-section"] = function(root){
+  var sectionEntry = greffierCurrentSection;
+  if(!sectionEntry){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Aucune section sélectionnée.")));
+    return;
+  }
+  var cache = greffierSectionCache[sectionEntry.name] || { status:"idle", members:[], planning:[] };
+  root.appendChild(h("p", {class:"lede"}, "Section "+sectionEntry.name+" — lecture seule."));
+
+  if(cache.status==="loading" || cache.status==="idle"){
+    root.appendChild(h("p", {class:"footnote"}, "Chargement…"));
+    return;
+  }
+  if(cache.status==="error"){
+    root.appendChild(h("p", {class:"footnote"}, "Impossible de récupérer les données de cette section pour le moment (connexion ?)."));
+    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ loadGreffierSection(sectionEntry, true); render("greffier-section"); }}, "Réessayer"));
+    return;
+  }
+
+  var mergedEntries = mergePlanningEntriesForDisplay(cache.planning);
+
+  root.appendChild(h("div", {class:"section-title"}, "Planning"));
+  if(!mergedEntries.length){
+    root.appendChild(h("p", {class:"footnote"}, "Aucune audience enregistrée pour cette section."));
+  } else {
+    var planningPanel = h("div", {class:"panel"});
+    mergedEntries.forEach(function(pl){
+      var completeness = mergedEntryCompleteness(pl);
+      var presidentTxt = pl.president ? resolveMemberNameIn(cache.members, pl.president) : "Président(e) non renseigné(e)";
+      var assesseursTxt = pl.assesseurs.length ? pl.assesseurs.map(function(id){ return resolveMemberNameIn(cache.members, id); }).join(", ") : "Assesseur(s) non renseigné(s)";
+      planningPanel.appendChild(h("div", {class:"row-click"+(completeness.incomplete ? " incomplete" : "")},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, planningDateLabel(pl.date)+" — "+planningTypeLabel(pl.type)),
+          h("div", {class:"rc-sub"}, (completeness.incomplete ? "⚠ " : "")+presidentTxt+" · "+assesseursTxt)
+        )
+      ));
+    });
+    root.appendChild(planningPanel);
+    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
+      exportPlanningImageForGreffierSection(sectionEntry.name, cache.members, state.greffierAccess.greffierName, "toutes-dates", "Toutes les dates enregistrées", mergedEntries);
+    }}, "Télécharger le planning (JPEG)"));
+  }
+
+  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Conseillers"));
+  if(!cache.members.length){
+    root.appendChild(h("p", {class:"footnote"}, "Aucun conseiller enregistré pour cette section."));
+  } else {
+    var membersPanel = h("div", {class:"panel"});
+    cache.members.slice().sort(memberSortCompare).forEach(function(m){
+      var sub = [m.college, m.syndicat].filter(Boolean).join(" · ");
+      membersPanel.appendChild(h("div", {class:"row-click"},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
+          h("div", {class:"rc-sub"}, sub || "—")
+        ),
+        h("div", {style:"display:flex; flex-direction:column; align-items:flex-end; gap:2px;"},
+          m.tel ? h("a", {href:"tel:"+m.tel, style:"font-size:.85rem;"}, formatTelFR(m.tel)) : null,
+          m.email ? h("a", {href:"mailto:"+m.email, style:"font-size:.85rem;"}, m.email) : null
+        )
+      ));
+    });
+    root.appendChild(membersPanel);
+  }
+
+  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:18px", onclick:function(){ loadGreffierSection(sectionEntry, true); render("greffier-section"); }}, "Actualiser cette section"));
 };
 
 /* =================================================================
@@ -4488,16 +4863,90 @@ function openAdminGreffierForm(existing){
   form.appendChild(h("label", {style:"display:flex; align-items:center; gap:8px; padding:6px 0;"}, vacCb, h("span", null, "Responsable vacations")));
   form.appendChild(h("div", {class:"footnote"}, "Un seul greffier à la fois : le cocher ici retire automatiquement cette fonction à quiconque la portait déjà. Affiché à tous les conseillers du CPH dans Annuaire > Contacts utiles."));
 
-  var actions = h("div", {style:"margin-top:18px"});
-  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+  /* Accès à l'application pour CE greffier (voir ACCÈS GREFFIER plus haut
+     dans le script) : un code long à transmettre une seule fois (comme un
+     code de section), donnant accès en lecture seule au planning
+     (téléchargeable en JPEG) et à la liste des conseillers des sections
+     cochées ci-dessus. Pour une fiche déjà existante uniquement — même
+     raison que le code personnel d'un conseiller (voir plus bas dans
+     l'espace administrateur) : une fiche pas encore créée n'a encore rien
+     à générer. */
+  if(isEdit){
+    form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Accès à l'application"));
+    var accessPanel = h("div", {class:"panel", style:"margin-top:4px"});
+    var cachedAccessCode = adminGreffierPins[draft.id];
+    if(cachedAccessCode){
+      accessPanel.appendChild(h("div", {class:"info-row"},
+        h("div", {class:"info-label"}, "Code d'accès"),
+        h("div", {class:"info-value", style:"font-family:monospace; font-weight:700; letter-spacing:1px; word-break:break-all;"}, cachedAccessCode)
+      ));
+      accessPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ copyText(cachedAccessCode); }}, "Copier le code"));
+      accessPanel.appendChild(h("p", {class:"footnote", style:"margin:8px 0 0"}, "À transmettre en privé (SMS, email…) — donne accès, en lecture seule, au planning et à l'annuaire des sections cochées ci-dessus."));
+    } else {
+      accessPanel.appendChild(h("p", {class:"footnote", style:"margin:0"}, "Aucun accès configuré pour ce greffier — il ne peut pas encore se connecter à l'application."));
+    }
+    accessPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
+      var entry = buildEntryFromForm();
+      if(!entry){ toast("Renseignez au moins un nom ou un prénom."); return; }
+      if(!entry.sections.length){ toast("Cochez au moins une section avant de générer un accès."); return; }
+      commitEntry(entry, true);
+      buildAndPublishGreffierAccess(entry, cachedAccessCode || null, function(result){
+        if(!result.ok){
+          toast(result.reason==="no-section" ? "Aucune des sections cochées n'est encore indexée dans l'espace administrateur." : "Échec de la publication de l'accès — vérifiez votre connexion.");
+          return;
+        }
+        toast((cachedAccessCode ? "Accès mis à jour" : "Accès généré")+(result.missingCount ? " ("+result.missingCount+" section(s) pas encore indexée(s) ignorée(s))." : "."));
+        closeSheet();
+        var refreshed = (adminBuffer.sectionSettings.cphGreffiers||[]).filter(function(g){ return g.id===draft.id; })[0] || entry;
+        openAdminGreffierForm(refreshed);
+      });
+    }}, cachedAccessCode ? "Mettre à jour l'accès" : "Générer l'accès"));
+    if(cachedAccessCode){
+      accessPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
+        var entry = buildEntryFromForm();
+        if(!entry){ toast("Renseignez au moins un nom ou un prénom."); return; }
+        if(!entry.sections.length){ toast("Cochez au moins une section avant de régénérer un accès."); return; }
+        commitEntry(entry, true);
+        var expiredCode = cachedAccessCode;
+        buildAndPublishGreffierAccess(entry, null, function(result){
+          if(!result.ok){
+            toast(result.reason==="no-section" ? "Aucune des sections cochées n'est encore indexée dans l'espace administrateur." : "Échec de la publication de l'accès — vérifiez votre connexion.");
+            return;
+          }
+          /* firestore.rules interdit toute suppression (comme pour
+             sections/registry/adminPins ci-dessus) : l'ancien document
+             greffierAccess/{expiredCode} resterait donc indéfiniment
+             déchiffrable avec l'ancien code s'il n'était pas neutralisé —
+             on le republie ici avec un bundle VIDE (aucune section), pour
+             que ce code, même encore entre de mauvaises mains, ne donne
+             plus jamais accès à quoi que ce soit. */
+          pushGreffierAccess(expiredCode, {greffierName:"", sections:[]}).catch(function(){});
+          toast("Nouveau code généré — l'ancien ne fonctionne plus.");
+          closeSheet();
+          var refreshed = (adminBuffer.sectionSettings.cphGreffiers||[]).filter(function(g){ return g.id===draft.id; })[0] || entry;
+          openAdminGreffierForm(refreshed);
+        });
+      }}, "Régénérer un nouveau code (invalide l'ancien)"));
+    }
+    form.appendChild(accessPanel);
+  }
+
+  /* Extrait pour être réutilisé par le bouton « Accès greffier » ci-dessous
+     (voir plus bas) : générer/mettre à jour l'accès d'un greffier doit
+     d'abord enregistrer ses éventuelles modifications de sections en
+     attente (cases cochées) plutôt que de publier un bundle à partir d'une
+     affectation potentiellement pas encore enregistrée. */
+  function buildEntryFromForm(){
     var nom = nomIn.value.trim(), prenom = prenomIn.value.trim();
-    if(!nom && !prenom){ toast("Renseignez au moins un nom ou un prénom."); return; }
+    if(!nom && !prenom) return null;
     var chosenSections = SECTIONS.filter(function(sName){ return sectionChecks[sName].checked; });
-    var entry = {
+    return {
       id: draft.id, prenom:prenom, nom:nom,
       email: emailIn.value.trim(), tel: telIn.value.trim(),
       sections: chosenSections, vacationsResponsable: !!vacCb.checked
     };
+  }
+  function commitEntry(entry, silent){
     var list = (adminBuffer.sectionSettings.cphGreffiers || []).slice();
     /* Un seul « Responsable vacations » à la fois — même enforcement que
        « Fonction en section »/« Fonction au niveau du CPH » ailleurs. */
@@ -4508,11 +4957,20 @@ function openAdminGreffierForm(existing){
     for(var gi=0; gi<list.length; gi++){ if(list[gi].id===entry.id){ idx = gi; break; } }
     if(idx===-1) list.push(entry); else list[idx] = entry;
     adminBuffer.sectionSettings.cphGreffiers = list;
-    closeSheet(); render("sysadmin-cph-greffiers"); scheduleAdminAutoPush();
-    toast("Greffier enregistré — propagation aux autres sections…");
+    draft = Object.assign({}, entry, {sections: entry.sections.slice()});
+    scheduleAdminAutoPush();
+    if(!silent) toast("Greffier enregistré — propagation aux autres sections…");
     propagateCphGreffiersToAllSections(adminBuffer.cph, list, function(ok){
-      toast(ok ? ("Propagé à "+ok+(ok>1?" autres sections.":" autre section.")) : "Greffier enregistré (aucune autre section à mettre à jour).");
+      if(!silent) toast(ok ? ("Propagé à "+ok+(ok>1?" autres sections.":" autre section.")) : "Greffier enregistré (aucune autre section à mettre à jour).");
     });
+  }
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    var entry = buildEntryFromForm();
+    if(!entry){ toast("Renseignez au moins un nom ou un prénom."); return; }
+    commitEntry(entry, false);
+    closeSheet(); render("sysadmin-cph-greffiers");
   }}, isEdit ? "Enregistrer" : "Ajouter le greffier"));
   if(isEdit){
     actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
@@ -4764,6 +5222,62 @@ function propagateCphContactToAllSections(key, cph, contactValue, onDone){
    ci-dessous. */
 function propagateCphGreffiersToAllSections(cph, greffiersValue, onDone){
   propagateSectionSettingsPatchToAllSections(cph, function(settings){ settings.cphGreffiers = greffiersValue; }, onDone);
+}
+
+/* Résout, pour une liste de NOMS de section, leur code de section RÉEL —
+   utilisée pour construire le bundle d'accès d'un greffier (voir ACCÈS
+   GREFFIER et openAdminGreffierForm). La section actuellement ouverte dans
+   l'espace administrateur (adminBuffer) est résolue directement depuis
+   adminBuffer.sectionCode, déjà connu, plutôt que via une consultation du
+   registre (même optimisation que propagateSectionSettingsPatchToAllSections,
+   qui l'exclut carrément puisqu'elle n'a pas besoin d'être relue). Une
+   section demandée mais pas encore indexée dans le registre (jamais créée
+   depuis l'espace administrateur) est silencieusement omise du résultat —
+   même choix que le reste de l'espace administrateur (voir
+   propagateSectionSettingsPatchToAllSections) plutôt que de bloquer toute
+   la génération pour une seule section manquante. */
+function resolveSectionCodesFor(cph, sectionNames, onDone){
+  var resolved = [];
+  var pending = sectionNames.length;
+  if(!pending){ onDone(resolved); return; }
+  function settle(){ pending--; if(pending===0) onDone(resolved); }
+  sectionNames.forEach(function(sectionName){
+    if(adminBuffer && adminBuffer.cph===cph && adminBuffer.section===sectionName){
+      resolved.push({name:sectionName, sectionCode:adminBuffer.sectionCode});
+      settle();
+      return;
+    }
+    lookupAdminRegistry(adminSessionCode, cph, sectionName).then(function(sectionCode){
+      if(sectionCode) resolved.push({name:sectionName, sectionCode:sectionCode});
+      settle();
+    }).catch(settle);
+  });
+}
+/* Génère (ou republie sous le même code) le bundle d'accès d'un greffier —
+   voir ACCÈS GREFFIER : résout le code réel de chacune de ses sections
+   affectées, publie le tout chiffré dans greffierAccess/{code}, puis
+   mémorise ce code EN CLAIR dans le coffre administrateur (adminGreffierPins
+   + persistAdminPins) pour rester consultable sans le régénérer — même
+   principe que les codes personnels des conseillers. accessCode : celui
+   déjà connu pour republier (mise à jour), ou omis pour en générer un
+   nouveau (première génération, ou régénération volontaire). */
+function buildAndPublishGreffierAccess(greffier, accessCode, onDone){
+  var code = accessCode || generateSectionCode();
+  resolveSectionCodesFor(adminBuffer.cph, greffier.sections || [], function(sections){
+    if(!sections.length){
+      onDone({ok:false, reason:"no-section", code:code});
+      return;
+    }
+    var bundle = { greffierName: [greffier.prenom, greffier.nom].filter(Boolean).join(" "), sections: sections };
+    pushGreffierAccess(code, bundle).then(function(){
+      adminGreffierPins[greffier.id] = code;
+      var pinUpdate = {}; pinUpdate[greffier.id] = code;
+      persistAdminPins(adminBuffer.cph, "__greffiers__", pinUpdate);
+      onDone({ok:true, code:code, sectionsCount:sections.length, missingCount:(greffier.sections||[]).length-sections.length});
+    }).catch(function(){
+      onDone({ok:false, reason:"push-failed", code:code});
+    });
+  });
 }
 
 /* =================================================================
@@ -9169,9 +9683,13 @@ function mergedEntryCompleteness(pl){
   return { presidentMissing:presidentMissing, assesseursMissing:assesseursMissing, assesseursExpected:assesseursExpected, incomplete: presidentMissing || assesseursMissing };
 }
 
-/* Nom de fichier du document de planning : planning-{période}[-NOM]. */
-function planningDocBaseName(periodKey, scopeSlug){
-  var nom = sanitizeFilenamePart(state.profile.nom);
+/* Nom de fichier du document de planning : planning-{période}[-NOM].
+   nomOverride (facultatif) : remplace state.profile.nom — utilisé par le
+   téléchargement du planning d'une section depuis l'espace GREFFIER (voir
+   openGreffierSectionScreen plus bas), qui n'a pas de profil de
+   conseiller. */
+function planningDocBaseName(periodKey, scopeSlug, nomOverride){
+  var nom = sanitizeFilenamePart(nomOverride!==undefined ? nomOverride : state.profile.nom);
   var base = "planning-"+periodKey+(scopeSlug ? "-"+scopeSlug : "");
   return nom ? (base+"-"+nom) : base;
 }
@@ -9188,11 +9706,17 @@ function planningDocBaseName(periodKey, scopeSlug){
    puisqu'une même ligne réunit désormais les deux collèges (voir
    mergePlanningEntriesForDisplay). scopeLabel est déjà mis en forme par
    l'appelant (ex. « Collège Salarié » ou « MARTIN Alice »). entries doit
-   avoir déjà été fusionné par mergePlanningEntriesForDisplay. */
-function buildPlanningCanvases(periodLabel, scopeLabel, entries){
+   avoir déjà été fusionné par mergePlanningEntriesForDisplay. subTxtOverride
+   (facultatif) : remplace entièrement la ligne "qui télécharge" habituelle
+   (nom + CPH + section, lue sur state.profile) — utilisé par le
+   téléchargement depuis l'espace GREFFIER (voir openGreffierSectionScreen
+   plus bas), qui n'a pas de profil de conseiller et affiche plutôt le nom
+   du greffier + la section consultée. */
+function buildPlanningCanvases(periodLabel, scopeLabel, entries, subTxtOverride){
   var titleTxt = "Planning — "+(scopeLabel||"—")+" — "+periodLabel;
   var cphDisp = cphLabel(state.profile);
-  var subTxt = (fullName(state.profile)||"Conseiller(ère) prud’homal(e)") + (cphDisp ? " · CPH de "+cphDisp : "") + (state.profile.section ? " · Section "+state.profile.section : "");
+  var subTxt = subTxtOverride!==undefined ? subTxtOverride
+    : (fullName(state.profile)||"Conseiller(ère) prud’homal(e)") + (cphDisp ? " · CPH de "+cphDisp : "") + (state.profile.section ? " · Section "+state.profile.section : "");
   var sans = "-apple-system,'Segoe UI',Roboto,Arial,sans-serif";
   var missingBg = "#F5E1DE", missingText = "#B34D3B";
 
@@ -9356,10 +9880,12 @@ function showPlanningImageFallback(blobs, baseName){
   ));
 }
 
-function exportPlanningImage(periodKey, periodLabel, scopeLabel, scopeSlug, entries){
+/* overrides (facultatif) : {subTxt, nom} — voir buildPlanningCanvases /
+   planningDocBaseName ci-dessus, utilisé par l'espace GREFFIER. */
+function exportPlanningImage(periodKey, periodLabel, scopeLabel, scopeSlug, entries, overrides){
   toast("Préparation de l’image…");
-  var canvases = buildPlanningCanvases(periodLabel, scopeLabel, entries);
-  var baseName = planningDocBaseName(periodKey, scopeSlug);
+  var canvases = buildPlanningCanvases(periodLabel, scopeLabel, entries, overrides && overrides.subTxt);
+  var baseName = planningDocBaseName(periodKey, scopeSlug, overrides && overrides.nom);
   Promise.all(canvases.map(function(c){ return canvasToJpegBlob(c, 0.92); })).then(function(blobs){
     downloadsReady.then(function(){
       if(!downloadsCap){ showPlanningImageFallback(blobs, baseName); return; }
@@ -9380,6 +9906,32 @@ function exportPlanningImage(periodKey, periodLabel, scopeLabel, scopeSlug, entr
       next();
     });
   });
+}
+
+/* Variante utilisée depuis l'espace GREFFIER (voir openGreffierSectionScreen
+   plus bas) : le greffier n'a pas de state.sectionMembers/state.profile
+   propres (aucun profil de conseiller sur cet appareil) — resolveMemberNameForPrint,
+   utilisée à l'intérieur de buildPlanningCanvases pour imprimer les noms des
+   audiences, lit pourtant toujours state.sectionMembers directement.
+   Plutôt que de refaire transiter la liste des conseillers à travers toute
+   la chaîne buildPlanningCanvases -> resolveMemberNameForPrint ->
+   resolveMemberName, on substitue temporairement state.sectionMembers le
+   temps du seul appel SYNCHRONE qui en a besoin (la construction des
+   canevas, avant tout downloadsCap.save() asynchrone) puis on la restaure
+   aussitôt après — sans jamais toucher à un éventuel profil de conseiller
+   déjà présent sur cet appareil (voir state.greffierAccess, entièrement
+   séparé de state.profile/state.sectionMembers). */
+function exportPlanningImageForGreffierSection(sectionName, sectionMembers, greffierName, periodKey, periodLabel, entries){
+  var savedMembers = state.sectionMembers;
+  state.sectionMembers = sectionMembers || [];
+  try{
+    exportPlanningImage(periodKey, periodLabel, "Section "+sectionName, slugifyForRegistry(sectionName), entries, {
+      subTxt: (greffierName || "Greffier(ère)") + " · Section "+sectionName,
+      nom: sectionName
+    });
+  } finally {
+    state.sectionMembers = savedMembers;
+  }
 }
 
 var PLANNING_TYPE_ORDER = {"bj":0, "bco":1, "bco-mee":2};
@@ -10261,6 +10813,21 @@ render(navStack[navStack.length-1]);
       var sectionsPatch = {};
       sectionsPatch[sectionSlug] = { iv: entry.iv, ciphertext: entry.ciphertext, updatedAt: serverTimestamp() };
       return setDoc(doc(db, "cphDirectory", cphId), { cph: entry.cph||"", sections: sectionsPatch }, { merge: true });
+    },
+    /* Accès greffier (voir module ACCÈS GREFFIER dans le script classique
+       ci-dessus) : un document par code d'accès (identifiant = le code
+       lui-même, comme "sections"), chiffré avec une clé dérivée de ce même
+       code — aucun autre secret n'entre en jeu. */
+    getGreffierAccessDoc: function(accessCode){
+      return getDoc(doc(db, "greffierAccess", accessCode)).then(function(snap){
+        if(!snap.exists()) return null;
+        var data = snap.data();
+        return { iv: data.iv, ciphertext: data.ciphertext };
+      });
+    },
+    setGreffierAccessDoc: function(accessCode, data){
+      var payload = Object.assign({}, data, { updatedAt: serverTimestamp() });
+      return setDoc(doc(db, "greffierAccess", accessCode), payload);
     }
   };
 
