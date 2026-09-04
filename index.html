@@ -3723,7 +3723,8 @@ var SCREEN_TITLES = {
   "sysadmin-section-members":"Liste de la section", "sysadmin-section-planning":"Planning de la section",
   "sysadmin-section-settings":"Paramètres de la section", "sysadmin-cph-greffiers":"Greffiers du CPH",
   "onboarding-activite":"Bienvenue", "onboarding-signature":"Bienvenue",
-  "greffier-home":"Espace greffier", "greffier-section":"Section"
+  "greffier-home":"Espace greffier", "greffier-section":"Section",
+  "greffier-section-planning":"Planning", "greffier-section-annuaire":"Conseillers"
 };
 /* Écrans du parcours d'accueil : ni bouton retour ni icône Réglages tant
    qu'on y est (voir render() plus bas) — un conseiller ne doit pas
@@ -3803,7 +3804,7 @@ function render(screenId){
      l'espace GREFFIER (voir GREFFIER_HOME_SCREEN ci-dessus) : un greffier
      n'a pas de profil de conseiller, rien à y régler — se déconnecter se
      fait directement depuis renderers["greffier-home"]. */
-  document.getElementById("btn-settings").style.display = (ONBOARDING_SCREENS.indexOf(screenId)!==-1 || screenId===GREFFIER_HOME_SCREEN || screenId==="greffier-section") ? "none" : "flex";
+  document.getElementById("btn-settings").style.display = (ONBOARDING_SCREENS.indexOf(screenId)!==-1 || screenId===GREFFIER_HOME_SCREEN || screenId.indexOf("greffier-section")===0) ? "none" : "flex";
   var main = document.getElementById("main");
   clear(main);
   var screen = h("div", {class:"screen active", id:"screen-"+screenId});
@@ -4096,7 +4097,107 @@ function loadGreffierSection(sectionEntry, force){
   });
 }
 
+/* Écran « Section » du greffier : un simple menu (Planning / Conseillers),
+   voir échange avec l'utilisateur (« prévoir une page menu en séparant
+   planning et annuaire des conseillers »). Le chargement de la section
+   reste déclenché ici (comme avant la scission) pour que l'onglet
+   Conseillers s'affiche déjà à jour dès qu'on l'ouvre ; l'onglet Planning,
+   lui, ne s'appuie JAMAIS sur ce cache pour le téléchargement — voir
+   renderers["greffier-section-planning"] ci-dessous, qui relance
+   systématiquement sa propre synchronisation au moment du téléchargement
+   (exigence explicite de l'utilisateur : « il est très important que le
+   planning soit synchronisé au moment de ces actions »). */
 renderers["greffier-section"] = function(root){
+  var sectionEntry = greffierCurrentSection;
+  if(!sectionEntry){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Aucune section sélectionnée.")));
+    return;
+  }
+  var cache = greffierSectionCache[sectionEntry.name] || { status:"idle", members:[], planning:[] };
+  root.appendChild(h("p", {class:"lede"}, "Section "+sectionEntry.name+" — lecture seule."));
+
+  var menu = h("div", {class:"panel"});
+  menu.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){ go("greffier-section-planning"); },
+      onkeydown:function(e){ if(e.key==="Enter") go("greffier-section-planning"); }},
+    h("div", {class:"rc-main"},
+      h("div", {class:"rc-title"}, "Planning"),
+      h("div", {class:"rc-sub"}, "Choisir un mois et télécharger l'image (JPEG)")
+    ),
+    icon("ic-chev", "chev")
+  ));
+  menu.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){ go("greffier-section-annuaire"); },
+      onkeydown:function(e){ if(e.key==="Enter") go("greffier-section-annuaire"); }},
+    h("div", {class:"rc-main"},
+      h("div", {class:"rc-title"}, "Conseillers"),
+      h("div", {class:"rc-sub"}, "Annuaire de la section")
+    ),
+    icon("ic-chev", "chev")
+  ));
+  root.appendChild(menu);
+
+  if(cache.status==="error"){
+    root.appendChild(h("p", {class:"footnote", style:"margin-top:14px"}, "Impossible de récupérer les données de cette section pour le moment (connexion ?)."));
+    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ loadGreffierSection(sectionEntry, true); render("greffier-section"); }}, "Réessayer"));
+  }
+};
+
+/* Onglet Planning : volontairement PAS de liste de dates affichée
+   directement (demande de l'utilisateur) — juste un choix mois+année puis
+   un téléchargement. Le bouton « Télécharger » relance à chaque clic une
+   synchronisation fraîche (pullSectionSync), IGNORANT le cache déjà
+   chargé pour l'onglet Conseillers/le menu : c'est la seule façon de
+   garantir que l'image téléchargée reflète toujours la toute dernière
+   version publiée par la section, y compris si elle a été modifiée entre
+   l'ouverture de l'espace greffier et ce clic précis. En cas d'échec de
+   synchronisation, on n'utilise JAMAIS le cache existant comme repli
+   silencieux : on prévient et on n'aboutit à aucun téléchargement. */
+renderers["greffier-section-planning"] = function(root){
+  var sectionEntry = greffierCurrentSection;
+  if(!sectionEntry){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Aucune section sélectionnée.")));
+    return;
+  }
+  root.appendChild(h("p", {class:"lede"}, "Section "+sectionEntry.name+" — téléchargement du planning au format JPEG."));
+
+  var monthVal = monthKey(todayISO());
+  root.appendChild(h("label", {class:"field-label"}, "Mois"));
+  var monthInput = h("input", {type:"month", value: monthVal, onchange:function(){ monthVal = monthInput.value; }});
+  root.appendChild(monthInput);
+
+  var statusLine = h("p", {class:"footnote", style:"margin-top:10px"});
+  root.appendChild(statusLine);
+
+  var dlBtn = h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:function(){
+    if(!monthInput.value){ toast("Choisissez un mois."); return; }
+    monthVal = monthInput.value;
+    dlBtn.disabled = true;
+    statusLine.textContent = "Synchronisation en cours…";
+    pullSectionSync(sectionEntry.sectionCode).then(function(result){
+      dlBtn.disabled = false;
+      var payload = (result && result.payload) || {};
+      var freshMembers = Array.isArray(payload.sectionMembers) ? payload.sectionMembers : [];
+      var freshPlanning = Array.isArray(payload.planning) ? payload.planning : [];
+      greffierSectionCache[sectionEntry.name] = { status:"loaded", members:freshMembers, planning:freshPlanning };
+      var periodRecords = freshPlanning.filter(function(pl){ return monthKey(pl.date)===monthVal; });
+      if(!periodRecords.length){
+        statusLine.textContent = "Section à jour — aucune audience enregistrée pour ce mois.";
+        toast("Aucune audience enregistrée pour ce mois.");
+        return;
+      }
+      var mergedEntries = mergePlanningEntriesForDisplay(periodRecords);
+      statusLine.textContent = "Section à jour — préparation de l'image…";
+      exportPlanningImageForGreffierSection(sectionEntry.name, freshMembers, state.greffierAccess.greffierName, monthVal, monthLabel(monthVal), mergedEntries);
+      statusLine.textContent = "Image téléchargée (planning à jour à l'instant).";
+    }).catch(function(){
+      dlBtn.disabled = false;
+      statusLine.textContent = "Échec de la synchronisation — aucun téléchargement effectué.";
+      toast("Impossible de synchroniser cette section pour le moment (connexion ?) — réessayez.");
+    });
+  }}, "Télécharger (JPEG)");
+  root.appendChild(dlBtn);
+};
+
+renderers["greffier-section-annuaire"] = function(root){
   var sectionEntry = greffierCurrentSection;
   if(!sectionEntry){
     root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Aucune section sélectionnée.")));
@@ -4111,35 +4212,10 @@ renderers["greffier-section"] = function(root){
   }
   if(cache.status==="error"){
     root.appendChild(h("p", {class:"footnote"}, "Impossible de récupérer les données de cette section pour le moment (connexion ?)."));
-    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ loadGreffierSection(sectionEntry, true); render("greffier-section"); }}, "Réessayer"));
+    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ loadGreffierSection(sectionEntry, true); render("greffier-section-annuaire"); }}, "Réessayer"));
     return;
   }
 
-  var mergedEntries = mergePlanningEntriesForDisplay(cache.planning);
-
-  root.appendChild(h("div", {class:"section-title"}, "Planning"));
-  if(!mergedEntries.length){
-    root.appendChild(h("p", {class:"footnote"}, "Aucune audience enregistrée pour cette section."));
-  } else {
-    var planningPanel = h("div", {class:"panel"});
-    mergedEntries.forEach(function(pl){
-      var completeness = mergedEntryCompleteness(pl);
-      var presidentTxt = pl.president ? resolveMemberNameIn(cache.members, pl.president) : "Président(e) non renseigné(e)";
-      var assesseursTxt = pl.assesseurs.length ? pl.assesseurs.map(function(id){ return resolveMemberNameIn(cache.members, id); }).join(", ") : "Assesseur(s) non renseigné(s)";
-      planningPanel.appendChild(h("div", {class:"row-click"+(completeness.incomplete ? " incomplete" : "")},
-        h("div", {class:"rc-main"},
-          h("div", {class:"rc-title"}, planningDateLabel(pl.date)+" — "+planningTypeLabel(pl.type)),
-          h("div", {class:"rc-sub"}, (completeness.incomplete ? "⚠ " : "")+presidentTxt+" · "+assesseursTxt)
-        )
-      ));
-    });
-    root.appendChild(planningPanel);
-    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
-      exportPlanningImageForGreffierSection(sectionEntry.name, cache.members, state.greffierAccess.greffierName, "toutes-dates", "Toutes les dates enregistrées", mergedEntries);
-    }}, "Télécharger le planning (JPEG)"));
-  }
-
-  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Conseillers"));
   if(!cache.members.length){
     root.appendChild(h("p", {class:"footnote"}, "Aucun conseiller enregistré pour cette section."));
   } else {
@@ -4160,7 +4236,7 @@ renderers["greffier-section"] = function(root){
     root.appendChild(membersPanel);
   }
 
-  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:18px", onclick:function(){ loadGreffierSection(sectionEntry, true); render("greffier-section"); }}, "Actualiser cette section"));
+  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:18px", onclick:function(){ loadGreffierSection(sectionEntry, true); render("greffier-section-annuaire"); }}, "Actualiser cette section"));
 };
 
 /* =================================================================
