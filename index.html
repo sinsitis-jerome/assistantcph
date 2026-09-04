@@ -1028,9 +1028,49 @@ function bindTelFormatting(input, onChange){
     if(onChange) onChange(formatted);
   });
 }
-function isAppOwner(){
-  var p = state.profile;
+/* Détermine si CET appareil est celui de la personne désignée administrateur
+   de l'application — une seule pour tous les CPH et toutes les sections
+   (voir échange avec l'utilisateur : « le bouton administrateur ne doit
+   pouvoir être vu que par la personne que l'administrateur désigne comme
+   administrateur »). Pilote la visibilité du badge "Administrateur" de
+   l'accueil, de la section "Espace administrateur" de Réglages, et de la
+   carte + du contenu réel de "Administrer le CPH" — jamais la protection de
+   l'espace administrateur lui-même (le code à 8 chiffres reste seul et
+   entier responsable de ça, voir openAdminEntryPoint).
+   Remplace l'ancien isAppOwner() (comparaison en dur au nom "Jérôme
+   Piquer") par une vraie désignation par fiche (state.adminIdentity, voir
+   DEFAULT_STATE et designateAdmin ci-dessous) — sur le même principe que
+   deriveCphRoleFor, mais globale plutôt que par section. Tant qu'aucune
+   désignation explicite n'a encore jamais été faite (adminIdentity.memberId
+   vide — cas de toute installation antérieure à ce champ, y compris la
+   toute première fois que ce code tourne), on retombe sur l'ancienne
+   comparaison par nom : un filet de sécurité qui évite qu'un changement
+   purement technique ne verrouille accidentellement l'administrateur
+   actuel hors de son propre espace. */
+function isDesignatedAdmin(){
+  var p = state.profile, a = state.adminIdentity;
+  if(a && a.memberId){
+    var cph = p.cph===CPH_AUTRE ? p.cphAutre : p.cph;
+    return !!p.memberId && p.memberId===a.memberId && p.section===a.section && cph===a.cph;
+  }
   return normName(p.prenom)==="jerome" && normName(p.nom)==="piquer";
+}
+/* Rafraîchit state.adminIdentity depuis le document Firestore global
+   admin/config — voir isDesignatedAdmin(). Défensif à dessein (bridge pas
+   chargé, fonction absente d'un pont de test, hors connexion...) : dans
+   tous ces cas, on résout simplement sans rien changer, la dernière valeur
+   locale connue restant en place (jamais bloquant, jamais d'erreur remontée
+   à l'appelant — voir selectMember). */
+function refreshAdminIdentityFor(){
+  if(!syncAvailable() || !window.__fbFirestore.getAdminConfig) return Promise.resolve();
+  return window.__fbFirestore.getAdminConfig().then(function(cfg){
+    state.adminIdentity = {
+      cph: (cfg && cfg.adminRefCph) || "",
+      section: (cfg && cfg.adminRefSection) || "",
+      memberId: (cfg && cfg.adminRefMemberId) || "",
+      name: (cfg && cfg.adminRefName) || ""
+    };
+  }).catch(function(){ /* best-effort, voir commentaire ci-dessus */ });
 }
 /* Tous ces champs sont obligatoires pour activer l'application (recopiés
    automatiquement depuis la fiche choisie dans l'annuaire et la section
@@ -1179,6 +1219,23 @@ var DEFAULT_STATE = {
      aucune distinction d'identité — voir Modèle d'accès dans
      firestore.rules. */
   sync:{ sectionCode:"", lastSyncAt:null, lastSyncedSnapshot:null, revoked:false },
+  /* Référence de la personne désignée administrateur de l'application — une
+     seule pour tous les CPH et toutes les sections (voir échange avec
+     l'utilisateur : « le bouton administrateur ne doit pouvoir être vu que
+     par la personne que l'administrateur désigne... il n'y en a qu'une
+     seule pour tout les CPH et toutes les sections »). Sur le même principe
+     que la désignation du président/vice-président du CPH (voir
+     deriveCphRoleFor) mais globale plutôt que par section : une fiche
+     précise de l'annuaire (cph+section+memberId), jamais un simple nom.
+     Recopiée localement (voir selectMember) depuis le document Firestore
+     global admin/config — lisible par tout appareil sans connaître le code
+     administrateur, exactement comme le hash de ce code lui-même — au même
+     moment que sectionRole/cphRole, donc avec la même limite déjà assumée
+     ailleurs (ne se rafraîchit qu'à une nouvelle synchronisation suivie
+     d'un nouveau choix de fiche). memberId vide = aucune désignation
+     explicite n'a encore jamais été faite : voir isDesignatedAdmin() pour
+     le filet de sécurité qui s'applique dans ce cas. */
+  adminIdentity:{ cph:"", section:"", memberId:"", name:"" },
   /* Codes personnels (4 chiffres) en clair pour les fiches créées ou
      régénérées SUR CET APPAREIL — voir le module CODE PERSONNEL PAR
      CONSEILLER : jamais synchronisé (syncPayloadFromState ne transmet que
@@ -1412,6 +1469,13 @@ function migrate(parsed){
       s.sync.lastSyncAt = typeof parsed.sync.lastSyncAt==="string" ? parsed.sync.lastSyncAt : null;
       s.sync.lastSyncedSnapshot = typeof parsed.sync.lastSyncedSnapshot==="string" ? parsed.sync.lastSyncedSnapshot : null;
       s.sync.revoked = parsed.sync.revoked===true;
+    }
+    if(parsed.adminIdentity && typeof parsed.adminIdentity==="object"){
+      var ai = parsed.adminIdentity;
+      s.adminIdentity.cph = typeof ai.cph==="string" ? ai.cph : "";
+      s.adminIdentity.section = typeof ai.section==="string" ? ai.section : "";
+      s.adminIdentity.memberId = typeof ai.memberId==="string" ? ai.memberId : "";
+      s.adminIdentity.name = typeof ai.name==="string" ? ai.name : "";
     }
     /* Voir defaultSectionSettings()/sanitizeSectionSettings() : reconstruit
        systématiquement la forme complète, jamais modifiée localement par un
@@ -2358,6 +2422,59 @@ function openChangeAdminCodeSheet(){
   ));
 }
 
+/* Désignation de LA personne administrateur de l'application (voir échange
+   avec l'utilisateur : « le bouton administrateur ne doit pouvoir être vu
+   que par la personne que l'administrateur désigne comme administrateur.
+   Il n'y en a qu'une seule pour tout les CPH et toutes les sections. »).
+   Sur le même principe que la désignation du président/vice-président du
+   CPH (openCrossSectionMemberPicker, voir openAdminSectionContactForm) mais
+   globale : une seule fiche pour toute l'application, jamais dupliquée
+   section par section. Écrit directement dans admin/config (merge:true,
+   voir setAdminConfig) — jamais dans sectionSettings, qui reste propre à
+   chaque section. Voir isDesignatedAdmin() pour la lecture côté appareils. */
+function openDesignateAdminSheet(){
+  var body = h("div", null);
+  var status = h("p", {class:"lede"}, "Chargement de la désignation actuelle…");
+  body.appendChild(status);
+  openSheet("Désigner l'administrateur", body);
+
+  if(!syncAvailable()){ status.textContent = "Synchronisation indisponible pour le moment (vérifiez votre connexion)."; return; }
+
+  window.__fbFirestore.getAdminConfig().then(function(cfg){
+    var current = (cfg && cfg.adminRefMemberId)
+      ? (cfg.adminRefName || "(sans nom)")+" — "+cfg.adminRefSection+", "+cfg.adminRefCph
+      : "Aucune désignation explicite pour l'instant (repli sur Jérôme Piquer, reconnu par son nom).";
+    status.textContent = "Administrateur actuel : "+current;
+
+    var cphAutreIn2 = h("input", {type:"text", style:"margin-top:8px; display:none", placeholder:"Nom exact du CPH tel que saisi par le président"});
+    var cphSel2 = h("select", {onchange:function(){ cphAutreIn2.style.display = cphSel2.value===CPH_AUTRE ? "" : "none"; }},
+      h("option", {value:""}, "— Sélectionner —"),
+      CPH_REGIONS.map(function(region){
+        return h("optgroup", {label:"Cour d’appel de "+region[0]},
+          region[1].map(function(ville){ return h("option", {value:ville, selected: ville==="Béziers" ? "selected" : null}, ville); }));
+      }),
+      h("option", {value:CPH_AUTRE}, "Autre / non listé"));
+    body.appendChild(h("label", {class:"field-label", style:"margin-top:12px"}, "CPH de la personne à désigner"));
+    body.appendChild(cphSel2);
+    body.appendChild(cphAutreIn2);
+    body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){
+      var cph = cphSel2.value===CPH_AUTRE ? cphAutreIn2.value.trim() : cphSel2.value;
+      if(!cph){ toast("Choisissez un CPH."); return; }
+      openCrossSectionMemberPicker(cph, function(m, section){
+        window.__fbFirestore.setAdminConfig({
+          adminRefCph: cph, adminRefSection: section, adminRefMemberId: m.id,
+          adminRefName: memberDisplayName(m) || ""
+        }).then(function(){
+          toast("Administrateur désigné : "+(memberDisplayName(m)||"cette fiche")+".");
+        }).catch(function(){ toast("Impossible d'enregistrer la désignation pour le moment (connexion ?)."); });
+      });
+    }}, "Choisir un conseiller"));
+    body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
+  }).catch(function(){
+    status.textContent = "Impossible de récupérer la désignation actuelle (connexion ?).";
+  });
+}
+
 /* Première étape quand une section choisie dans le panneau administrateur
    n'est pas (encore) trouvée dans le registre : deux cas possibles — soit
    elle existe déjà (créée par le président lui-même depuis Réglages, ou
@@ -2991,11 +3108,22 @@ function openPickMyMemberSheet(onDone){
        via l'une des fiches "Président(e) du CPH"/"Vice-président(e) du CPH"
        de Paramètres de section. */
     state.profile.cphRole = deriveCphRoleFor(m.id);
-    saveState();
-    closeSheet();
-    toast("Profil lié à « "+memberDisplayName(m)+" ».");
-    render(navStack[navStack.length-1]);
-    if(onDone) onDone(m);
+    /* Référence de l'administrateur désigné (voir isDesignatedAdmin) : un
+       document Firestore GLOBAL (admin/config), distinct de sectionSettings
+       et jamais rapatrié par la synchronisation normale de section — d'où
+       cet appel dédié, au même moment que sectionRole/cphRole ci-dessus, sur
+       le même principe (ne se rafraîchit qu'à un nouveau choix de fiche).
+       Fonctionne sans connaître le code administrateur (voir getAdminConfig)
+       et reste silencieux en cas d'échec (hors ligne, pont pas encore
+       chargé...) : conserve alors la dernière valeur locale connue, jamais
+       bloquant pour la suite du parcours. */
+    refreshAdminIdentityFor().then(function(){
+      saveState();
+      closeSheet();
+      toast("Profil lié à « "+memberDisplayName(m)+" ».");
+      render(navStack[navStack.length-1]);
+      if(onDone) onDone(m);
+    });
   }
 
   /* Si cette fiche est protégée par un code personnel (voir le module CODE
@@ -3782,6 +3910,8 @@ renderers["sysadmin-panel"] = function(root){
   var secPanel = h("div", {class:"panel"});
   secPanel.appendChild(h("p", {class:"lede", style:"margin:0 0 12px"}, "Modifier le code à 8 chiffres qui protège cet espace."));
   secPanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:openChangeAdminCodeSheet}, "Modifier le code administrateur"));
+  secPanel.appendChild(h("p", {class:"lede", style:"margin:12px 0"}, "Désigner la seule personne, pour tous les CPH et toutes les sections, qui voit le bouton Administrateur sur son profil et dans ses Réglages. Le code à 8 chiffres reste seul responsable de la protection de cet espace."));
+  secPanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:openDesignateAdminSheet}, "Désigner l'administrateur"));
   secPanel.appendChild(h("button", {class:"sheet-btn danger", style:"margin-top:8px", onclick:function(){
     adminSessionCode = null; adminBuffer = null; clearAdminAutoPush();
     toast("Session administrateur fermée.");
@@ -4032,12 +4162,14 @@ var SECTION_SETTINGS_CONTACTS = [
 ];
 /* Sous-ensemble de SECTION_SETTINGS_CONTACTS réservé, à l'affichage, à la
    présidence du CPH (président(e) ET vice-président(e) — voir isCphOfficer
-   ci-dessous ; renderers["annuaire-cph"] > "Contacts institutionnels du
-   CPH"). Revue UI : renderers["liens-utiles"] affichait jusqu'ici ces 7
-   fiches à TOUT conseiller synchronisé, sans la même restriction —
-   incohérent avec l'intention posée sur l'écran Annuaire. Facteur ici pour
-   que les deux écrans appliquent exactement la même règle plutôt que de la
-   dupliquer (et risquer de la faire diverger à nouveau). */
+   ci-dessous), utilisé par le panneau "Contacts institutionnels du CPH" de
+   renderers["annuaire-cph"] — seul écran à afficher ces fiches depuis que le
+   bloc "Contacts" a été retiré de renderers["liens-utiles"] (redondant avec
+   Annuaire, voir échange avec l'utilisateur). Revue UI d'origine : les deux
+   écrans affichaient jusqu'ici ces fiches avec des règles divergentes
+   (Liens utiles à tout conseiller synchronisé, Annuaire réservé à la
+   présidence du CPH) — corrigé en unifiant sur cette même liste avant que
+   Liens utiles ne perde ce bloc entièrement. */
 var CPH_INSTITUTIONAL_CONTACT_KEYS = ["presidentTj","secretariatTj","presidentCourAppel","secretariatCourAppel","secretaireGeneralCourAppel","batonnier","directeurGreffe","procureurRepublique","procureurAdjoint"];
 /* Un président(e) ET un vice-président(e) du CPH voient tous deux les mêmes
    contacts institutionnels (voir échange avec l'utilisateur : « pour les
@@ -4569,20 +4701,22 @@ renderers["annuaire-cph"] = function(root){
     root.appendChild(h("div", {class:"init-empty"}, h("p", null, "L'annuaire du CPH nécessite la synchronisation de section — activez-la depuis Réglages.")));
     return;
   }
-  if(!state.sectionSettings.cphDirectoryCode){
-    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "L'annuaire partagé du CPH n'est pas encore configuré — contactez l'administrateur de l'application.")));
-    return;
-  }
-  if(annuaireCphState.status==="idle") loadAnnuaireCph(false);
-  if(annuaireCphState.status==="idle" || annuaireCphState.status==="loading"){
-    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement de l'annuaire du CPH…")));
-    return;
-  }
-  if(annuaireCphState.status==="error"){
-    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Impossible de récupérer l'annuaire du CPH pour le moment (connexion ?).")));
-    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ loadAnnuaireCph(true); }}, "Réessayer"));
-    return;
-  }
+
+  /* L'annuaire PARTAGÉ du CPH (code dédié, cphDirectoryCode) n'est requis
+     que pour la liste "Conseillers" (toutes sections confondues) et le
+     panneau "Greffiers de toutes les sections" ci-dessous, tous deux
+     alimentés par le document Firestore partagé cphDirectory/{cphId} — voir
+     loadAnnuaireCph. « Contacts utiles » (et son panneau institutionnel), en
+     revanche, ne lit jamais que state.sectionSettings.contacts, déjà
+     disponible dès la simple synchronisation de section ci-dessus : cette
+     dépendance inutile a été retirée pour que ce bloc reste consultable
+     même sur un CPH qui n'a pas encore activé l'annuaire partagé — voir
+     échange avec l'utilisateur, qui a par ailleurs demandé de retirer la
+     redondance de « Liens utiles » (voir renderers["liens-utiles"]) au
+     profit de CET écran : il devait donc rester disponible sans cette
+     condition supplémentaire. */
+  var sharedDirActive = !!state.sectionSettings.cphDirectoryCode;
+  if(sharedDirActive && annuaireCphState.status==="idle") loadAnnuaireCph(false);
 
   /* Contacts utiles, positionnés au-dessus de l'annuaire des conseillers
      (et de ses filtres) — demande explicite de l'utilisateur : « Au dessus
@@ -4594,7 +4728,8 @@ renderers["annuaire-cph"] = function(root){
      voir échange avec l'utilisateur ci-dessous), ajoute les contacts
      institutionnels du CPH (dupliqués section par section, voir « Paramètres
      de la section » — ceux de la section de la personne qui regarde servent
-     de référence) ainsi que les greffiers de TOUTES les sections. */
+     de référence) ainsi que les greffiers de TOUTES les sections (ceux-ci
+     seuls nécessitent l'annuaire partagé, voir sharedDirActive ci-dessus). */
   function ficheName(f){ return (f && [f.prenom, f.nom].filter(Boolean).join(" ")) || null; }
   var sc = state.sectionSettings.contacts;
   var presSection = sectionRoleContact("president");
@@ -4635,15 +4770,23 @@ renderers["annuaire-cph"] = function(root){
       root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Contacts institutionnels du CPH"));
       root.appendChild(institPanel);
 
-      var greffiers = annuaireCphState.greffiers || [];
       root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Greffiers de toutes les sections"));
       var greffiersPanel = h("div", {class:"panel"});
-      if(!greffiers.length){
-        greffiersPanel.appendChild(h("div", {class:"footnote"}, "Aucun greffier de section publié pour l'instant."));
+      if(!sharedDirActive){
+        greffiersPanel.appendChild(h("div", {class:"footnote"}, "Nécessite que l'annuaire partagé du CPH soit activé par l'administrateur (Paramètres de la section)."));
+      } else if(annuaireCphState.status==="idle" || annuaireCphState.status==="loading"){
+        greffiersPanel.appendChild(h("div", {class:"footnote"}, "Chargement…"));
+      } else if(annuaireCphState.status==="error"){
+        greffiersPanel.appendChild(h("div", {class:"footnote"}, "Impossible de récupérer les greffiers pour le moment (connexion ?)."));
       } else {
-        greffiers.forEach(function(g){
-          greffiersPanel.appendChild(contactInfoRow(g.section, [g.prenom, g.nom].filter(Boolean).join(" ") || null, g));
-        });
+        var greffiers = annuaireCphState.greffiers || [];
+        if(!greffiers.length){
+          greffiersPanel.appendChild(h("div", {class:"footnote"}, "Aucun greffier de section publié pour l'instant."));
+        } else {
+          greffiers.forEach(function(g){
+            greffiersPanel.appendChild(contactInfoRow(g.section, [g.prenom, g.nom].filter(Boolean).join(" ") || null, g));
+          });
+        }
       }
       root.appendChild(greffiersPanel);
     }
@@ -4656,43 +4799,54 @@ renderers["annuaire-cph"] = function(root){
 
   root.appendChild(collapseSectionHeader("Conseillers", "conseillers"));
   if(!annuaireCphCollapse.conseillers){
-    root.appendChild(h("p", {class:"lede"}, "Tous les conseillers de "+(cphLabel(state.profile)||state.profile.cph||"votre CPH")+", toutes sections confondues — liste en lecture seule."));
-
-    var filterRow = h("div", {class:"btn-row"});
-    filterRow.appendChild(h("select", {onchange:function(e){ annuaireCphFilters.section = e.target.value; render("annuaire-cph"); }},
-      h("option", {value:"", selected: annuaireCphFilters.section?null:"selected"}, "Toutes les sections"),
-      sectionsPresent.map(function(s){ return h("option", {value:s, selected: s===annuaireCphFilters.section?"selected":null}, s); })
-    ));
-    filterRow.appendChild(h("select", {onchange:function(e){ annuaireCphFilters.college = e.target.value; render("annuaire-cph"); }},
-      h("option", {value:"", selected: annuaireCphFilters.college?null:"selected"}, "Tous les collèges"),
-      COLLEGES.map(function(c){ return h("option", {value:c, selected: c===annuaireCphFilters.college?"selected":null}, c); })
-    ));
-    root.appendChild(filterRow);
-
-    var filtered = entries.filter(function(e){
-      return (!annuaireCphFilters.section || e.section===annuaireCphFilters.section)
-        && (!annuaireCphFilters.college || e.college===annuaireCphFilters.college);
-    }).sort(memberSortCompare);
-
-    var list = h("div", {class:"panel", style:"margin-top:12px"});
-    if(!filtered.length){
-      list.appendChild(h("div", {class:"footnote"}, entries.length ? "Aucun conseiller pour ce filtre." : "Aucun conseiller publié pour l'instant."));
+    if(!sharedDirActive){
+      root.appendChild(h("p", {class:"footnote"}, "L'annuaire partagé du CPH n'est pas encore configuré — contactez l'administrateur de l'application."));
+    } else if(annuaireCphState.status==="idle" || annuaireCphState.status==="loading"){
+      root.appendChild(h("p", {class:"footnote"}, "Chargement de l'annuaire du CPH…"));
+    } else if(annuaireCphState.status==="error"){
+      root.appendChild(h("p", {class:"footnote"}, "Impossible de récupérer l'annuaire du CPH pour le moment (connexion ?)."));
+      root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ loadAnnuaireCph(true); }}, "Réessayer"));
     } else {
-      filtered.forEach(function(m){
-        list.appendChild(h("div", {class:"row-click", tabindex:"0",
-            onclick:function(){ openAnnuaireCphMemberDetail(m); },
-            onkeydown:function(e){ if(e.key==="Enter") openAnnuaireCphMemberDetail(m); }},
-          h("div", {class:"rc-main"},
-            h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
-            h("div", {class:"rc-sub"}, [m.section, m.college].filter(Boolean).join(" — ") || "—")
-          )
-        ));
-      });
+      root.appendChild(h("p", {class:"lede"}, "Tous les conseillers de "+(cphLabel(state.profile)||state.profile.cph||"votre CPH")+", toutes sections confondues — liste en lecture seule."));
+
+      var filterRow = h("div", {class:"btn-row"});
+      filterRow.appendChild(h("select", {onchange:function(e){ annuaireCphFilters.section = e.target.value; render("annuaire-cph"); }},
+        h("option", {value:"", selected: annuaireCphFilters.section?null:"selected"}, "Toutes les sections"),
+        sectionsPresent.map(function(s){ return h("option", {value:s, selected: s===annuaireCphFilters.section?"selected":null}, s); })
+      ));
+      filterRow.appendChild(h("select", {onchange:function(e){ annuaireCphFilters.college = e.target.value; render("annuaire-cph"); }},
+        h("option", {value:"", selected: annuaireCphFilters.college?null:"selected"}, "Tous les collèges"),
+        COLLEGES.map(function(c){ return h("option", {value:c, selected: c===annuaireCphFilters.college?"selected":null}, c); })
+      ));
+      root.appendChild(filterRow);
+
+      var filtered = entries.filter(function(e){
+        return (!annuaireCphFilters.section || e.section===annuaireCphFilters.section)
+          && (!annuaireCphFilters.college || e.college===annuaireCphFilters.college);
+      }).sort(memberSortCompare);
+
+      var list = h("div", {class:"panel", style:"margin-top:12px"});
+      if(!filtered.length){
+        list.appendChild(h("div", {class:"footnote"}, entries.length ? "Aucun conseiller pour ce filtre." : "Aucun conseiller publié pour l'instant."));
+      } else {
+        filtered.forEach(function(m){
+          list.appendChild(h("div", {class:"row-click", tabindex:"0",
+              onclick:function(){ openAnnuaireCphMemberDetail(m); },
+              onkeydown:function(e){ if(e.key==="Enter") openAnnuaireCphMemberDetail(m); }},
+            h("div", {class:"rc-main"},
+              h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
+              h("div", {class:"rc-sub"}, [m.section, m.college].filter(Boolean).join(" — ") || "—")
+            )
+          ));
+        });
+      }
+      root.appendChild(list);
+      root.appendChild(h("div", {class:"footnote", style:"margin-top:10px"}, filtered.length+(filtered.length>1 ? " conseillers" : " conseiller")));
     }
-    root.appendChild(list);
-    root.appendChild(h("div", {class:"footnote", style:"margin-top:10px"}, filtered.length+(filtered.length>1 ? " conseillers" : " conseiller")));
   }
-  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:12px", onclick:function(){ loadAnnuaireCph(true); }}, "Actualiser"));
+  if(sharedDirActive){
+    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:12px", onclick:function(){ loadAnnuaireCph(true); }}, "Actualiser"));
+  }
 };
 
 renderers.home = function(root){
@@ -4733,17 +4887,21 @@ renderers.home = function(root){
   }
 
   /* Raccourci vers l'espace administrateur, à côté du nom (demande
-     explicite de l'utilisateur : « un bouton administrateur sur mon
-     profil qui me permette d'afficher les écrans de l'admin sans
-     délogger »). Toujours affiché — la protection reste entièrement le
-     code à 8 chiffres (voir openAdminEntryPoint), jamais la discrétion de
-     ce bouton — mais volontairement discret (petit badge, pas un gros
-     bouton) pour ne pas attirer l'attention d'un simple conseiller. */
+     explicite de l'utilisateur à l'origine : « un bouton administrateur sur
+     mon profil qui me permette d'afficher les écrans de l'admin sans
+     délogger »). Initialement toujours affiché (la protection reposait
+     entièrement sur le code à 8 chiffres, jamais la discrétion de ce
+     bouton) — **corrigé depuis** (voir échange avec l'utilisateur : « le
+     bouton administrateur ne doit pouvoir être vu que par la personne que
+     l'administrateur désigne... quelque soit ses titres ou fonction ») :
+     réservé désormais à LA personne désignée administrateur
+     (isDesignatedAdmin), n'importe quel autre profil (conseiller, président
+     ou vice-président de section ou de CPH) ne le voit plus du tout. */
   var heroTitleRow = h("div", {style:"display:flex; align-items:center; gap:10px; flex-wrap:wrap;"},
     h("h1", {style:"margin:0"}, state.profile.prenom ? "Bonjour, "+state.profile.prenom : "Votre assistant CPH"),
-    h("div", {class:"badge blue", style:"cursor:pointer;", tabindex:"0",
+    isDesignatedAdmin() ? h("div", {class:"badge blue", style:"cursor:pointer;", tabindex:"0",
         onclick:openAdminEntryPoint, onkeydown:function(e){ if(e.key==="Enter") openAdminEntryPoint(); }},
-      "Administrateur")
+      "Administrateur") : null
   );
   wrap.appendChild(h("div", {class:"hero"},
     h("div", {class:"eyebrow"}, "Conseil de prud’hommes"),
@@ -4806,11 +4964,13 @@ renderers.home = function(root){
     card("ic-book", "Textes de référence", "Articles cités, recherche rapide", "refs"),
     card("ic-quote", "Phrases rituelles", "Les formules fréquentes en audience", "phrases", null, true),
     (state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president") ? card("ic-users", "Administrer ma section", "Outils présidence de section", "admin-section", null, true) : null,
-    state.profile.cphRole==="president" ? (
-      isAppOwner()
-        ? card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", null, true)
-        : card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", h("span",{class:"badge amber"},"Bientôt disponible"), true, true)
-    ) : null,
+    /* Réservée à LA personne désignée administrateur (voir isDesignatedAdmin) —
+       plus jamais conditionnée sur cphRole==="president" : être président(e)
+       du CPH et être l'administrateur de l'application sont désormais deux
+       fonctions bien distinctes (voir échange avec l'utilisateur, « quelque
+       soit ses titres ou fonction »), qui peuvent ou non coïncider selon qui
+       est désigné. */
+    isDesignatedAdmin() ? card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", null, true) : null,
     card("ic-globe", "Liens utiles", "Site web, annuaire, Formation ENM, Légifrance, ENSAP", "liens-utiles", null, true)
   );
   wrap.appendChild(grid);
@@ -9173,25 +9333,15 @@ renderers["liens-utiles"] = function(root){
   var timeRows = PLANNING_TYPES.filter(function(t){
     return settings.defaultTimes[t.id] && (settings.defaultTimes[t.id].debut || settings.defaultTimes[t.id].fin);
   });
-  /* Revue UI : les 7 fiches institutionnelles du CPH (TJ, Cour d'appel,
-     Bâtonnier, Greffe) n'ont de sens que pour la présidence du CPH —
-     président(e) ET vice-président(e), voir isCphOfficer — même restriction
-     que sur l'écran Annuaire > Contacts utiles, désormais partagée via
-     CPH_INSTITUTIONAL_CONTACT_KEYS plutôt que dupliquée. */
-  var contactRows = SECTION_SETTINGS_CONTACTS.filter(function(c){
-    if(CPH_INSTITUTIONAL_CONTACT_KEYS.indexOf(c.key)!==-1 && !isCphOfficer(state.profile.cphRole)) return false;
-    var f = settings.contacts[c.key];
-    return f && (f.prenom || f.nom || f.email || f.tel);
-  });
 
-  if(!visible.length && !timeRows.length && !contactRows.length){
+  if(!visible.length && !timeRows.length){
     root.appendChild(h("div", {class:"init-empty"},
       h("p", null, "Aucune information n’est configurée pour votre section pour l’instant.")
     ));
     return;
   }
 
-  root.appendChild(h("p", {class:"lede"}, "Accès rapide aux ressources, horaires et contacts utiles à votre section."));
+  root.appendChild(h("p", {class:"lede"}, "Accès rapide aux ressources et horaires utiles à votre section."));
 
   if(visible.length){
     var panel = h("div", {class:"panel"});
@@ -9224,29 +9374,20 @@ renderers["liens-utiles"] = function(root){
     root.appendChild(timesPanel);
   }
 
-  if(contactRows.length){
-    root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Contacts"));
-    var contactsPanel = h("div", {class:"panel"});
-    contactRows.forEach(function(c){
-      var f = settings.contacts[c.key];
-      var name = [f.prenom, f.nom].filter(Boolean).join(" ") || "—";
-      contactsPanel.appendChild(h("div", {class:"row-click"},
-        h("div", {class:"rc-main"},
-          h("div", {class:"rc-title"}, c.label),
-          h("div", {class:"rc-sub"}, name)
-        ),
-        h("div", {style:"display:flex; flex-direction:column; align-items:flex-end; gap:2px;"},
-          f.tel ? h("a", {href:"tel:"+f.tel, style:"font-size:.85rem;"}, formatTelFR(f.tel)) : null,
-          f.email ? h("a", {href:"mailto:"+f.email, style:"font-size:.85rem;"}, f.email) : null
-        )
-      ));
-    });
-    root.appendChild(contactsPanel);
-  }
+  /* Le bloc "Contacts" (greffier de section, président(e)/vice-président(e)
+     de section et de CPH, fiches institutionnelles) a été retiré d'ici — il
+     faisait doublon avec « Contacts utiles » de l'écran Annuaire du CPH
+     (voir renderers["annuaire-cph"]), qui reste désormais la seule source
+     pour ces informations (voir échange avec l'utilisateur : « les contacts
+     utiles sont dans Annuaire, on va donc les supprimer de "liens
+     utiles" »). Ce bloc-là n'a par ailleurs plus besoin de l'annuaire
+     partagé du CPH pour s'afficher (voir le commentaire dans
+     renderers["annuaire-cph"]), donc rien n'est perdu pour un CPH qui n'a
+     pas encore activé cette fonctionnalité. */
 };
 
 renderers["admin-cph"] = function(root){
-  if(!isAppOwner()){
+  if(!isDesignatedAdmin()){
     root.appendChild(h("div", {class:"banner"},
       h("span", null, h("b", null, "Bientôt disponible. "), "Cette rubrique est encore en cours de construction et n’est pas encore ouverte.")
     ));
@@ -9313,7 +9454,7 @@ function updatePriseFonctionProgress(){
   if(label) label.textContent = done+" / "+items.length+" étapes réalisées";
 }
 renderers["prise-fonction"] = function(root){
-  if(!isAppOwner()){
+  if(!isDesignatedAdmin()){
     root.appendChild(h("div", {class:"banner"},
       h("span", null, h("b", null, "Bientôt disponible. "), "Cette rubrique est encore en cours de construction et n’est pas encore ouverte.")
     ));
@@ -9698,12 +9839,19 @@ renderers.settings = function(root){
   syncPanel.appendChild(h("p", {class:"footnote", style:"margin-top:10px; margin-bottom:0"}, "Vos données se synchronisent désormais automatiquement (à l’ouverture, à chaque écran et au moins une fois par heure) — vous n’avez normalement rien à faire ici."));
   root.appendChild(syncPanel);
 
-  root.appendChild(h("div", {class:"section-title"}, "Espace administrateur"));
-  var sysAdminPanel = h("div", {class:"panel"});
-  sysAdminPanel.appendChild(h("p", {class:"lede", style:"margin:0 0 12px"}, "Accès réservé, protégé par un code à 8 chiffres : gestion de l'annuaire et du planning de n'importe quelle section, sur n'importe quel CPH."));
-  sysAdminPanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:openAdminEntryPoint},
-    adminSessionCode ? "Rouvrir l'espace administrateur" : "Ouvrir l'espace administrateur"));
-  root.appendChild(sysAdminPanel);
+  /* Réservée à LA personne désignée administrateur (voir isDesignatedAdmin
+     et échange avec l'utilisateur, même correction que le badge de
+     l'accueil) : n'importe quel autre profil ne voit plus cette section du
+     tout, alors qu'elle était jusqu'ici toujours affichée (protection
+     reposant uniquement sur le code à 8 chiffres). */
+  if(isDesignatedAdmin()){
+    root.appendChild(h("div", {class:"section-title"}, "Espace administrateur"));
+    var sysAdminPanel = h("div", {class:"panel"});
+    sysAdminPanel.appendChild(h("p", {class:"lede", style:"margin:0 0 12px"}, "Accès réservé, protégé par un code à 8 chiffres : gestion de l'annuaire et du planning de n'importe quelle section, sur n'importe quel CPH."));
+    sysAdminPanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:openAdminEntryPoint},
+      adminSessionCode ? "Rouvrir l'espace administrateur" : "Ouvrir l'espace administrateur"));
+    root.appendChild(sysAdminPanel);
+  }
 
   root.appendChild(h("div", {class:"footnote"}, "Mon Assistant CPH a été réalisé pour les conseillers prud’homaux, dans l’esprit du guide « Présider un BJ ». Les textes de loi reproduits le sont à titre pratique — vérifiez toujours leur version en vigueur sur Légifrance avant toute décision."));
 };
@@ -9789,12 +9937,30 @@ render(navStack[navStack.length-1]);
     getAdminConfig: function(){
       return getDoc(doc(db, "admin", "config")).then(function(snap){
         if(!snap.exists()) return null;
-        return { codeHash: snap.data().codeHash };
+        var data = snap.data();
+        /* adminRefCph/adminRefSection/adminRefMemberId (+ adminRefName, pour
+           affichage seulement) : référence de la personne désignée
+           administrateur, voir isDesignatedAdmin(). Document déjà lisible
+           par tout appareil (même principe que codeHash, voir
+           firestore.rules) — c'est justement ce qui permet à un appareil
+           ordinaire de savoir s'il doit afficher le bouton, sans connaître
+           le code administrateur. */
+        return {
+          codeHash: data.codeHash,
+          adminRefCph: data.adminRefCph || "",
+          adminRefSection: data.adminRefSection || "",
+          adminRefMemberId: data.adminRefMemberId || "",
+          adminRefName: data.adminRefName || ""
+        };
       });
     },
     setAdminConfig: function(data){
+      /* merge:true — ce document porte à la fois le hash du code (changeAdminCode)
+         et la référence de l'administrateur désigné (designateAdmin), deux
+         écritures indépendantes qui ne doivent jamais s'écraser l'une
+         l'autre. */
       var payload = Object.assign({}, data, { updatedAt: serverTimestamp() });
-      return setDoc(doc(db, "admin", "config"), payload);
+      return setDoc(doc(db, "admin", "config"), payload, { merge: true });
     },
     getRegistryDoc: function(registryId){
       return getDoc(doc(db, "registry", registryId)).then(function(snap){
