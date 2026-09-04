@@ -4903,9 +4903,25 @@ renderers.home = function(root){
         onclick:openAdminEntryPoint, onkeydown:function(e){ if(e.key==="Enter") openAdminEntryPoint(); }},
       "Administrateur") : null
   );
+  /* Sous-titre listant les fonctions effectivement reconnues sur CET
+     appareil (sectionRole / cphRole / désignation administrateur) —
+     demande explicite de l'utilisateur, pour pouvoir vérifier depuis un
+     simple coup d'œil sur l'accueil (y compris sur smartphone, sans accès
+     à la console du navigateur) ce que l'application reconnaît réellement,
+     plutôt que de devoir deviner pourquoi tel écran affiche ou non tel
+     contact. N'affiche que ce qui est vraiment posé sur ce profil — jamais
+     déclaratif, toujours dérivé des mêmes champs que le reste de
+     l'application (state.profile.sectionRole / .cphRole, isDesignatedAdmin). */
+  var activeFunctionLabels = [
+    sectionRoleLabel(state.profile.sectionRole),
+    cphRoleLabel(state.profile.cphRole),
+    isDesignatedAdmin() ? "Administrateur" : null
+  ].filter(Boolean);
   wrap.appendChild(h("div", {class:"hero"},
     h("div", {class:"eyebrow"}, "Conseil de prud’hommes"),
-    heroTitleRow
+    heroTitleRow,
+    h("div", {class:"lede", style:"margin-top:4px"},
+      activeFunctionLabels.length ? "Fonctions reconnues sur cet appareil : "+activeFunctionLabels.join(" · ") : "Aucune fonction particulière reconnue sur cet appareil.")
   ));
 
   function quickLink(icon_id, label, href){
@@ -7047,6 +7063,14 @@ function memberDisplayName(m){
 function sectionRoleLabel(role){
   return role==="president" ? "Président(e) de section"
     : role==="vice-president" ? "Vice-président(e) de section"
+    : null;
+}
+/* Libellé de l'étiquette cphRole (voir deriveCphRoleFor) — même principe que
+   sectionRoleLabel ci-dessus, pour la fonction au niveau du CPH plutôt que
+   de la section. Réutilisé par le sous-titre de l'accueil ci-dessous. */
+function cphRoleLabel(role){
+  return role==="president" ? "Président(e) du CPH"
+    : role==="vice-president" ? "Vice-président(e) du CPH"
     : null;
 }
 /* Compteurs automatiques BJ/BCO d'un conseiller, calculés à partir des
