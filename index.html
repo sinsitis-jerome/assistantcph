@@ -298,6 +298,17 @@
   }
   .row-click:last-child{ border-bottom:none; }
   .row-click:active{ background:var(--panel-2); }
+  /* Icône décorative optionnelle en tête de ligne (voir sectionCard(), 3/4
+     cartes de "Section administrée") — jusqu'ici sans règle CSS dédiée : la
+     div .ic héritait donc du SVG interne width="100%" height="100%" sans
+     aucune contrainte de taille, s'affichant énorme et écrasant le texte
+     (signalé par l'utilisateur, capture d'écran à l'appui). Même gabarit
+     que .tool-card .ic, réutilisé ici pour rester cohérent visuellement. */
+  .row-click .ic{
+    width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center;
+    background:var(--accent-glow); color:var(--accent-2); flex:none;
+  }
+  .row-click .ic svg{ width:20px; height:20px; }
   .row-click .rc-main{ flex:1; min-width:0; }
   .row-click .rc-title{ font-size:.9rem; font-weight:600; }
   .row-click .rc-sub{ font-size:.76rem; color:var(--text-muted); margin-top:2px; }
@@ -1691,34 +1702,30 @@ function decryptCphDirectoryEntry(cphDirectoryCode, envelope){
    Reste chiffré de bout en bout comme le reste (clé dérivée du code
    annuaire du CPH) : ni plus ni moins protégé que prénom/nom/collège
    déjà publiés depuis le début. */
-/* greffierContact (facultatif) : la fiche de contact du greffier DE CETTE
-   SECTION (state.sectionSettings.contacts.greffier ou son équivalent côté
-   adminBuffer), republiée elle aussi dans ce même document partagé — voir
-   « Coordonnées de tous les greffiers du CPH » plus bas (openAnnuaireCphMemberDetail
-   et alentours) : réservée à l'affichage au Président du CPH, mais techniquement
-   protégée par le même code annuaire du CPH que le reste de ce document, ni
-   plus ni moins que les fiches conseillers déjà publiées ici (compromis déjà
-   accepté avec l'utilisateur pour celles-ci). */
-function cphDirectoryEntryFromMembers(sectionName, members, greffierContact){
-  var entry = {
+/* Le greffier de section a longtemps voyagé ici aussi (greffierContact,
+   republié pour alimenter « Coordonnées de tous les greffiers du CPH ») —
+   retiré depuis que les greffiers sont devenus une vraie liste PARTAGÉE du
+   CPH (sectionSettings.cphGreffiers, voir defaultSectionSettings), déjà
+   propagée identique à toutes les sections et donc déjà disponible à tout
+   le monde sans passer par ce mécanisme : voir renderers["annuaire-cph"]
+   (bloc « Greffiers de toutes les sections », lu directement depuis
+   cphGreffiers). */
+function cphDirectoryEntryFromMembers(sectionName, members){
+  return {
     section: sectionName,
     members: (members||[]).map(function(m){
       return { prenom:m.prenom||"", nom:m.nom||"", college:m.college||"", tel:m.tel||"", email:m.email||"" };
     })
   };
-  if(greffierContact && (greffierContact.prenom || greffierContact.nom || greffierContact.tel || greffierContact.email)){
-    entry.greffier = { prenom:greffierContact.prenom||"", nom:greffierContact.nom||"", tel:greffierContact.tel||"", email:greffierContact.email||"" };
-  }
-  return entry;
 }
 /* Best-effort et silencieux en cas d'échec (hors ligne, code annuaire pas
    encore configuré pour ce CPH, pont Firebase pas encore chargé...) :
    l'annuaire partagé du CPH est un service en plus, jamais une condition
    de réussite de l'envoi normal de la section qui l'accompagne. */
-function publishCphDirectoryEntry(cph, sectionName, cphDirectoryCode, members, greffierContact){
+function publishCphDirectoryEntry(cph, sectionName, cphDirectoryCode, members){
   if(!cphDirectoryCode || !syncAvailable() || !window.__fbFirestore.setCphDirectorySectionEntry) return Promise.resolve();
   try{
-    return encryptCphDirectoryEntry(cphDirectoryCode, cphDirectoryEntryFromMembers(sectionName, members, greffierContact)).then(function(envelope){
+    return encryptCphDirectoryEntry(cphDirectoryCode, cphDirectoryEntryFromMembers(sectionName, members)).then(function(envelope){
       return window.__fbFirestore.setCphDirectorySectionEntry(cphDirectoryIdFor(cph), slugifyForRegistry(sectionName), {
         cph: cph||"", iv: envelope.iv, ciphertext: envelope.ciphertext
       });
@@ -1747,7 +1754,6 @@ function defaultSectionSettings(){
       "bco-mee": { debut:"", fin:"" }
     },
     contacts: {
-      greffier: { prenom:"", nom:"", email:"", tel:"" },
       /* presidentCph/vicePresidentCph portent, en plus du nom/tél/email
          affichés à tous, trois champs de référence optionnels
          (refCph/refSection/refMemberId) posés uniquement quand la fiche a
@@ -1781,7 +1787,24 @@ function defaultSectionSettings(){
        automatiquement à sa prochaine synchronisation normale, sans jamais
        avoir à le saisir lui-même. Vide tant que l'administrateur n'a pas
        activé cette fonctionnalité pour le CPH. */
-    cphDirectoryCode: ""
+    cphDirectoryCode: "",
+    /* Liste des greffiers DE TOUT LE CPH (pas dupliquée section par
+       section comme les fiches de contact ci-dessus) — voir échange avec
+       l'utilisateur : « Dans chaque CPH j'ai une liste de greffiers...
+       l'administrateur doit pouvoir créer cette liste... affecter à chaque
+       greffier une ou plusieurs sections... et aussi affecter la fonction
+       Responsable vacations à l'un des greffiers ». Remplace l'ancienne
+       fiche unique contacts.greffier (une par section, jamais partagée)
+       — voir renderers["sysadmin-cph-greffiers"] pour la gestion, et
+       renderers["annuaire-cph"] pour « Mon greffier »/« Responsable
+       vacations », dérivés ici de chaque greffier.sections. Chaque entrée :
+       {id, prenom, nom, email, tel, sections:[...], vacationsResponsable}.
+       Propagée IDENTIQUE à toutes les sections du CPH à chaque
+       modification (voir propagateCphGreffiersToAllSections), sur le même
+       principe que contacts.presidentCph/vicePresidentCph plus haut : une
+       seule vraie liste pour tout le CPH, jamais une copie par section
+       divergente. */
+    cphGreffiers: []
   };
 }
 /* Normalisation défensive (même esprit que migrate()) : reconstruit
@@ -1828,6 +1851,19 @@ function sanitizeSectionSettings(raw){
     });
   }
   if(typeof raw.cphDirectoryCode==="string") out.cphDirectoryCode = raw.cphDirectoryCode;
+  if(Array.isArray(raw.cphGreffiers)){
+    out.cphGreffiers = raw.cphGreffiers.filter(function(g){ return g && typeof g==="object"; }).map(function(g){
+      return {
+        id: (typeof g.id==="string" && g.id) ? g.id : uid(),
+        prenom: typeof g.prenom==="string" ? g.prenom : "",
+        nom: typeof g.nom==="string" ? g.nom : "",
+        email: typeof g.email==="string" ? g.email : "",
+        tel: typeof g.tel==="string" ? g.tel : "",
+        sections: Array.isArray(g.sections) ? g.sections.filter(function(s){ return SECTIONS.indexOf(s)!==-1; }) : [],
+        vacationsResponsable: g.vacationsResponsable===true
+      };
+    });
+  }
   return out;
 }
 /* Ce que la synchronisation transmet : l'annuaire des conseillers, le
@@ -2668,7 +2704,7 @@ function runAdminAutoPush(){
   var buf = adminBuffer;
   pushAdminBuffer().then(function(){
     if(buf.sectionSettings.cphDirectoryCode){
-      publishCphDirectoryEntry(buf.cph, buf.section, buf.sectionSettings.cphDirectoryCode, buf.sectionMembers, buf.sectionSettings.contacts.greffier);
+      publishCphDirectoryEntry(buf.cph, buf.section, buf.sectionSettings.cphDirectoryCode, buf.sectionMembers);
     }
   }).catch(function(){
     adminAutoPushRetryTimer = setTimeout(runAdminAutoPush, SECTION_AUTO_PUSH_RETRY_MS);
@@ -3041,7 +3077,7 @@ function runSectionAutoPush(){
   pushSectionSync(state.sync.sectionCode, cph, section).then(function(){
     markSyncDone();
     if(state.sectionSettings.cphDirectoryCode){
-      publishCphDirectoryEntry(cph, section, state.sectionSettings.cphDirectoryCode, state.sectionMembers, state.sectionSettings.contacts.greffier);
+      publishCphDirectoryEntry(cph, section, state.sectionSettings.cphDirectoryCode, state.sectionMembers);
     }
   }).catch(function(){
     /* Best-effort et silencieux : un échec ponctuel (hors ligne...) ne
@@ -3064,7 +3100,7 @@ function pushToSectionNow(){
     toast("Données envoyées — les autres acteurs les recevront à leur prochaine récupération.");
     render("settings");
     if(state.sectionSettings.cphDirectoryCode){
-      publishCphDirectoryEntry(cph, section, state.sectionSettings.cphDirectoryCode, state.sectionMembers, state.sectionSettings.contacts.greffier);
+      publishCphDirectoryEntry(cph, section, state.sectionSettings.cphDirectoryCode, state.sectionMembers);
     }
   }).catch(function(err){
     toast("Échec de l'envoi — vérifiez votre connexion.");
@@ -3538,7 +3574,7 @@ var SCREEN_TITLES = {
   "prise-fonction":"Prise de fonction",
   "sysadmin-panel":"Espace administrateur", "sysadmin-section":"Section administrée",
   "sysadmin-section-members":"Liste de la section", "sysadmin-section-planning":"Planning de la section",
-  "sysadmin-section-settings":"Paramètres de la section",
+  "sysadmin-section-settings":"Paramètres de la section", "sysadmin-cph-greffiers":"Greffiers du CPH",
   "onboarding-activite":"Bienvenue", "onboarding-signature":"Bienvenue"
 };
 /* Écrans du parcours d'accueil : ni bouton retour ni icône Réglages tant
@@ -3993,6 +4029,7 @@ renderers["sysadmin-section"] = function(root){
   cardsPanel.appendChild(sectionCard("ic-users", "Liste de la section", adminBuffer.sectionMembers.length ? (adminBuffer.sectionMembers.length+(adminBuffer.sectionMembers.length>1 ? " conseillers enregistrés" : " conseiller enregistré")) : "Aucun conseiller enregistré", "sysadmin-section-members"));
   cardsPanel.appendChild(sectionCard("ic-calendar", "Planning de la section", adminBuffer.planning.length ? (adminBuffer.planning.length+(adminBuffer.planning.length>1 ? " dates enregistrées" : " date enregistrée")) : "Aucune date enregistrée", "sysadmin-section-planning"));
   cardsPanel.appendChild(sectionCard("ic-gear", "Paramètres de la section", "Liens utiles, horaires par défaut, contacts", "sysadmin-section-settings"));
+  cardsPanel.appendChild(sectionCard("ic-building", "Greffiers du CPH", (adminBuffer.sectionSettings.cphGreffiers||[]).length ? ((adminBuffer.sectionSettings.cphGreffiers||[]).length+((adminBuffer.sectionSettings.cphGreffiers||[]).length>1 ? " greffiers enregistrés" : " greffier enregistré")) : "Aucun greffier enregistré", "sysadmin-cph-greffiers"));
   root.appendChild(cardsPanel);
 
   var actions = h("div", {style:"margin-top:20px; display:flex; flex-direction:column; gap:8px"});
@@ -4004,7 +4041,7 @@ renderers["sysadmin-section"] = function(root){
       saveBtn.disabled = false;
       toast("Modifications envoyées à la section.");
       if(adminBuffer.sectionSettings.cphDirectoryCode){
-        publishCphDirectoryEntry(adminBuffer.cph, adminBuffer.section, adminBuffer.sectionSettings.cphDirectoryCode, adminBuffer.sectionMembers, adminBuffer.sectionSettings.contacts.greffier);
+        publishCphDirectoryEntry(adminBuffer.cph, adminBuffer.section, adminBuffer.sectionSettings.cphDirectoryCode, adminBuffer.sectionMembers);
       }
     }).catch(function(){
       saveBtn.disabled = false;
@@ -4147,7 +4184,6 @@ var SECTION_SETTINGS_LINKS = [
   {key:"ensapUrl", label:"ENSAP / Bulletins de paie"}
 ];
 var SECTION_SETTINGS_CONTACTS = [
-  {key:"greffier", label:"Greffier de section"},
   {key:"presidentCph", label:"Président(e) du CPH", pickable:true},
   {key:"vicePresidentCph", label:"Vice-président(e) du CPH", pickable:true},
   {key:"presidentTj", label:"Président(e) du Tribunal judiciaire"},
@@ -4266,7 +4302,7 @@ function activateCphDirectory(){
         return pushSectionSyncPayload(sectionCode, cph, sectionName, {
           sectionMembers: members, planning: planning, sectionSettings: settings
         }).then(function(){
-          return publishCphDirectoryEntry(cph, sectionName, code, members, settings.contacts.greffier);
+          return publishCphDirectoryEntry(cph, sectionName, code, members);
         });
       }).then(function(){
         okCount++; if(--pending===0) finish();
@@ -4352,9 +4388,152 @@ renderers["sysadmin-section-settings"] = function(root){
   root.appendChild(adminSectionSaveReminder());
 };
 
+/* =================================================================
+   ÉCRAN — GREFFIERS DU CPH (espace administrateur)
+   ================================================================= */
+/* Demande de l'utilisateur : « Dans chaque CPH j'ai une liste de
+   greffiers... L'administrateur doit pouvoir créer cette liste de
+   greffiers avec prénom, nom, mail et tel comme pour les autres
+   contacts. Ensuite, il faut pouvoir affecter à chaque greffier une ou
+   plusieurs sections (qui doit nourrir le champ "Mon greffier" dans
+   l'annuaire de l'utilisateur) et aussi affecter la fonction "Responsable
+   vacations" à l'un des greffiers (dans le but aussi de nourrir les
+   contacts utiles des utilisateurs). » — remplace l'ancienne fiche unique
+   « Greffier de section » (une par section, jamais partagée entre elles,
+   voir defaultSectionSettings) : cette liste est UNE SEULE pour tout le
+   CPH (adminBuffer.sectionSettings.cphGreffiers), propagée identique à
+   toutes les sections déjà indexées à chaque modification — voir
+   propagateCphGreffiersToAllSections — sur le même principe que les fiches
+   Président(e)/Vice-président(e) du CPH. Écran dédié (4e carte de la page
+   d'accueil de la section administrée) plutôt qu'un bloc de plus dans
+   « Paramètres de la section » : cette liste est au niveau du CPH, pas
+   d'une section précise, contrairement au reste de cet écran. */
+renderers["sysadmin-cph-greffiers"] = function(root){
+  if(!requireAdminBuffer(root)) return;
+  if(!adminBuffer.loaded){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des données de la section…")));
+    return;
+  }
+  var greffiers = adminBuffer.sectionSettings.cphGreffiers || [];
+
+  root.appendChild(h("p", {class:"lede"}, "Liste des greffiers de "+adminBuffer.cph+" — commune à toutes les sections. Chaque greffier peut être affecté à une ou plusieurs sections (alimente « Mon greffier » dans l'Annuaire de chaque conseiller) ; un seul peut être désigné « Responsable vacations »."));
+
+  var list = h("div", {class:"panel"});
+  if(!greffiers.length){
+    list.appendChild(h("div", {class:"footnote"}, "Aucun greffier enregistré."));
+  } else {
+    greffiers.forEach(function(g){
+      var sectionsLabel = (g.sections||[]).length ? (g.sections||[]).join(", ") : "Aucune section affectée";
+      list.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){ openAdminGreffierForm(g); },
+          onkeydown:function(e){ if(e.key==="Enter") openAdminGreffierForm(g); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, [g.prenom, g.nom].filter(Boolean).join(" ") || "(Sans nom)"),
+          h("div", {class:"rc-sub"}, sectionsLabel+(g.vacationsResponsable ? " — Responsable vacations" : ""))
+        ),
+        icon("ic-chev", "chev")
+      ));
+    });
+  }
+  root.appendChild(list);
+  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ openAdminGreffierForm(null); }}, "+ Ajouter un greffier"));
+
+  root.appendChild(adminSectionSaveReminder());
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:8px"}, "Enregistrer ici republie aussi cette liste, à l'identique, vers toutes les autres sections déjà indexées de "+adminBuffer.cph+"."));
+};
+/* Formulaire d'ajout/modification d'un greffier — opère sur
+   adminBuffer.sectionSettings.cphGreffiers (comme openAdminMemberForm pour
+   les conseillers), puis propage la liste entière à toutes les autres
+   sections déjà indexées (voir propagateCphGreffiersToAllSections) dès
+   l'enregistrement, en plus de l'envoi automatique/normal de la section
+   actuellement ouverte (scheduleAdminAutoPush, qui couvre celle-ci —
+   propagateCphGreffiersToAllSections l'exclut délibérément, même principe
+   que propagateCphContactToAllSections). */
+function openAdminGreffierForm(existing){
+  var isEdit = !!existing;
+  var draft = existing ? Object.assign({}, existing, {sections: (existing.sections||[]).slice()}) : {id:uid(), prenom:"", nom:"", email:"", tel:"", sections:[], vacationsResponsable:false};
+
+  var form = h("div", null);
+  form.appendChild(h("label", {class:"field-label"}, "Prénom"));
+  var prenomIn = h("input", {type:"text", value:draft.prenom, autocapitalize:"words"});
+  bindPrenomCasing(prenomIn);
+  form.appendChild(prenomIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Nom"));
+  var nomIn = h("input", {type:"text", value:draft.nom, autocapitalize:"words"});
+  bindNomCasing(nomIn);
+  form.appendChild(nomIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Email"));
+  var emailIn = h("input", {type:"email", value:draft.email, autocapitalize:"none", autocomplete:"email"});
+  form.appendChild(emailIn);
+
+  form.appendChild(h("label", {class:"field-label"}, "Téléphone"));
+  var telIn = h("input", {type:"tel", value:draft.tel, autocomplete:"tel"});
+  bindTelFormatting(telIn);
+  form.appendChild(telIn);
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:4px"}, "Section(s) affectée(s)"));
+  var sectionChecks = {};
+  var sectionsBox = h("div", {class:"panel", style:"padding:10px 14px"});
+  SECTIONS.forEach(function(sName){
+    var cb = h("input", {type:"checkbox", checked: draft.sections.indexOf(sName)!==-1 ? "checked" : null});
+    sectionChecks[sName] = cb;
+    sectionsBox.appendChild(h("label", {style:"display:flex; align-items:center; gap:8px; padding:6px 0;"}, cb, h("span", null, sName)));
+  });
+  form.appendChild(sectionsBox);
+  form.appendChild(h("div", {class:"footnote"}, "Détermine « Mon greffier » dans l'Annuaire de chaque conseiller des sections cochées — un même greffier peut couvrir plusieurs sections."));
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Fonction"));
+  var vacCb = h("input", {type:"checkbox", checked: draft.vacationsResponsable ? "checked" : null});
+  form.appendChild(h("label", {style:"display:flex; align-items:center; gap:8px; padding:6px 0;"}, vacCb, h("span", null, "Responsable vacations")));
+  form.appendChild(h("div", {class:"footnote"}, "Un seul greffier à la fois : le cocher ici retire automatiquement cette fonction à quiconque la portait déjà. Affiché à tous les conseillers du CPH dans Annuaire > Contacts utiles."));
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    var nom = nomIn.value.trim(), prenom = prenomIn.value.trim();
+    if(!nom && !prenom){ toast("Renseignez au moins un nom ou un prénom."); return; }
+    var chosenSections = SECTIONS.filter(function(sName){ return sectionChecks[sName].checked; });
+    var entry = {
+      id: draft.id, prenom:prenom, nom:nom,
+      email: emailIn.value.trim(), tel: telIn.value.trim(),
+      sections: chosenSections, vacationsResponsable: !!vacCb.checked
+    };
+    var list = (adminBuffer.sectionSettings.cphGreffiers || []).slice();
+    /* Un seul « Responsable vacations » à la fois — même enforcement que
+       « Fonction en section »/« Fonction au niveau du CPH » ailleurs. */
+    if(entry.vacationsResponsable){
+      list = list.map(function(g){ return g.id===entry.id ? g : Object.assign({}, g, {vacationsResponsable:false}); });
+    }
+    var idx = -1;
+    for(var gi=0; gi<list.length; gi++){ if(list[gi].id===entry.id){ idx = gi; break; } }
+    if(idx===-1) list.push(entry); else list[idx] = entry;
+    adminBuffer.sectionSettings.cphGreffiers = list;
+    closeSheet(); render("sysadmin-cph-greffiers"); scheduleAdminAutoPush();
+    toast("Greffier enregistré — propagation aux autres sections…");
+    propagateCphGreffiersToAllSections(adminBuffer.cph, list, function(ok){
+      toast(ok ? ("Propagé à "+ok+(ok>1?" autres sections.":" autre section.")) : "Greffier enregistré (aucune autre section à mettre à jour).");
+    });
+  }}, isEdit ? "Enregistrer" : "Ajouter le greffier"));
+  if(isEdit){
+    actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
+      var list = (adminBuffer.sectionSettings.cphGreffiers || []).filter(function(g){ return g.id!==draft.id; });
+      adminBuffer.sectionSettings.cphGreffiers = list;
+      closeSheet(); render("sysadmin-cph-greffiers"); scheduleAdminAutoPush();
+      toast("Greffier supprimé — propagation aux autres sections…");
+      propagateCphGreffiersToAllSections(adminBuffer.cph, list, function(ok){
+        toast(ok ? ("Propagé à "+ok+(ok>1?" autres sections.":" autre section.")) : "Greffier supprimé (aucune autre section à mettre à jour).");
+      });
+    }}, "Supprimer ce greffier"));
+  }
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
+  form.appendChild(actions);
+
+  openSheet(isEdit ? "Modifier le greffier" : "Ajouter un greffier", form);
+}
+
 /* Formulaire d'une fiche de contact de « Paramètres de la section »
-   (greffier, président du CPH, président du TJ, président de la Cour
-   d'appel, bâtonnier, directeur de greffe) — même formulaire simple que
+   (président du CPH, président du TJ, président de la Cour d'appel,
+   bâtonnier, directeur de greffe) — même formulaire simple que
    openSectionRoleForm (Réglages, resté local et hors de portée de cet
    écran), mais opérant sur adminBuffer.sectionSettings.contacts. Pour
    « Président(e) du CPH » uniquement (pickable), un bouton supplémentaire
@@ -4545,8 +4724,15 @@ function openCrossSectionMemberPicker(cph, onPick){
    normal de cet écran). Best-effort et silencieux section par section (une
    section hors connexion ou pas encore indexée ne bloque pas les autres) ;
    le nombre de sections effectivement mises à jour est passé à onDone pour
-   le toast affiché à l'appelant. */
-function propagateCphContactToAllSections(key, cph, contactValue, onDone){
+   le toast affiché à l'appelant.
+
+   Généralisée (patchSettings, un simple mutateur) plutôt que spécifique à
+   contacts[key] : réutilisée telle quelle par la liste des greffiers du CPH
+   (voir propagateCphGreffiersToAllSections juste en dessous), qui doit
+   propager un TABLEAU entier plutôt qu'un seul champ, sur exactement le
+   même schéma (pull/patch/push section par section, section actuellement
+   ouverte jamais touchée par cette boucle). */
+function propagateSectionSettingsPatchToAllSections(cph, patchSettings, onDone){
   var others = SECTIONS.filter(function(s){ return s!==adminBuffer.section; });
   if(!others.length){ onDone(0); return; }
   var okCount = 0, pending = others.length;
@@ -4559,7 +4745,7 @@ function propagateCphContactToAllSections(key, cph, contactValue, onDone){
         var members = Array.isArray(payload.sectionMembers) ? payload.sectionMembers : [];
         var planning = Array.isArray(payload.planning) ? payload.planning : [];
         var settings = sanitizeSectionSettings(payload.sectionSettings);
-        settings.contacts[key] = contactValue;
+        patchSettings(settings);
         return pushSectionSyncPayload(sectionCode, cph, sectionName, {
           sectionMembers: members, planning: planning, sectionSettings: settings
         });
@@ -4568,6 +4754,16 @@ function propagateCphContactToAllSections(key, cph, contactValue, onDone){
       }).catch(settle);
     }).catch(settle);
   });
+}
+function propagateCphContactToAllSections(key, cph, contactValue, onDone){
+  propagateSectionSettingsPatchToAllSections(cph, function(settings){ settings.contacts[key] = contactValue; }, onDone);
+}
+/* Même principe que propagateCphContactToAllSections, pour la liste
+   ENTIÈRE des greffiers du CPH plutôt qu'une seule fiche de contact — voir
+   defaultSectionSettings (cphGreffiers) et renderers["sysadmin-cph-greffiers"]
+   ci-dessous. */
+function propagateCphGreffiersToAllSections(cph, greffiersValue, onDone){
+  propagateSectionSettingsPatchToAllSections(cph, function(settings){ settings.cphGreffiers = greffiersValue; }, onDone);
 }
 
 /* =================================================================
@@ -4583,7 +4779,7 @@ function propagateCphContactToAllSections(key, cph, contactValue, onDone){
    déclenche le chargement, les visites suivantes réutilisent le résultat
    déjà en mémoire tant que l'utilisateur ne demande pas explicitement à
    l'actualiser. */
-var annuaireCphState = { status:"idle", entries:null, greffiers:null };
+var annuaireCphState = { status:"idle", entries:null };
 var annuaireCphFilters = { section:"", college:"" };
 /* Repliés par défaut (demande de l'utilisateur) ; l'état du dépli n'a besoin
    de vivre que pour la session en cours, comme les filtres ci-dessus. */
@@ -4608,12 +4804,11 @@ function loadAnnuaireCph(force){
     var sections = (doc && doc.sections) || {};
     var keys = Object.keys(sections);
     if(!keys.length){
-      annuaireCphState.status = "loaded"; annuaireCphState.entries = []; annuaireCphState.greffiers = [];
+      annuaireCphState.status = "loaded"; annuaireCphState.entries = [];
       render("annuaire-cph");
       return;
     }
     var entries = [];
-    var greffiers = [];
     var pending = keys.length;
     keys.forEach(function(k){
       decryptCphDirectoryEntry(code, sections[k]).then(function(payload){
@@ -4621,20 +4816,12 @@ function loadAnnuaireCph(force){
         ((payload && payload.members) || []).forEach(function(m){
           entries.push({ prenom:m.prenom||"", nom:m.nom||"", college:m.college||"", section:sectionName, tel:m.tel||"", email:m.email||"" });
         });
-        /* Coordonnées du greffier de CETTE section, republiées dans le même
-           document partagé (voir publishCphDirectoryEntry) — regroupées ici
-           pour l'affichage réservé au Président du CPH, voir « Tous les
-           greffiers du CPH » plus bas. */
-        if(payload && payload.greffier && (payload.greffier.prenom || payload.greffier.nom || payload.greffier.tel || payload.greffier.email)){
-          greffiers.push({ section:sectionName, prenom:payload.greffier.prenom||"", nom:payload.greffier.nom||"", tel:payload.greffier.tel||"", email:payload.greffier.email||"" });
-        }
       }).catch(function(){ /* entrée illisible (ancien code, section corrompue…) : ignorée plutôt que de bloquer les autres */ })
         .then(function(){
           pending--;
           if(pending===0){
             annuaireCphState.status = "loaded";
             annuaireCphState.entries = entries;
-            annuaireCphState.greffiers = greffiers.sort(function(a,b){ return a.section.localeCompare(b.section); });
             render("annuaire-cph");
           }
         });
@@ -4703,37 +4890,51 @@ renderers["annuaire-cph"] = function(root){
   }
 
   /* L'annuaire PARTAGÉ du CPH (code dédié, cphDirectoryCode) n'est requis
-     que pour la liste "Conseillers" (toutes sections confondues) et le
-     panneau "Greffiers de toutes les sections" ci-dessous, tous deux
-     alimentés par le document Firestore partagé cphDirectory/{cphId} — voir
-     loadAnnuaireCph. « Contacts utiles » (et son panneau institutionnel), en
-     revanche, ne lit jamais que state.sectionSettings.contacts, déjà
-     disponible dès la simple synchronisation de section ci-dessus : cette
-     dépendance inutile a été retirée pour que ce bloc reste consultable
-     même sur un CPH qui n'a pas encore activé l'annuaire partagé — voir
-     échange avec l'utilisateur, qui a par ailleurs demandé de retirer la
-     redondance de « Liens utiles » (voir renderers["liens-utiles"]) au
-     profit de CET écran : il devait donc rester disponible sans cette
-     condition supplémentaire. */
+     que pour la liste "Conseillers" (toutes sections confondues) ci-dessous,
+     alimentée par le document Firestore partagé cphDirectory/{cphId} — voir
+     loadAnnuaireCph. « Contacts utiles » (son panneau institutionnel et ses
+     greffiers compris), en revanche, ne lit jamais que
+     state.sectionSettings.contacts/.cphGreffiers, déjà disponibles dès la
+     simple synchronisation de section ci-dessus : cette dépendance inutile
+     a été retirée pour que ce bloc reste consultable même sur un CPH qui
+     n'a pas encore activé l'annuaire partagé — voir échange avec
+     l'utilisateur, qui a par ailleurs demandé de retirer la redondance de
+     « Liens utiles » (voir renderers["liens-utiles"]) au profit de CET
+     écran : il devait donc rester disponible sans cette condition
+     supplémentaire. */
   var sharedDirActive = !!state.sectionSettings.cphDirectoryCode;
   if(sharedDirActive && annuaireCphState.status==="idle") loadAnnuaireCph(false);
 
   /* Contacts utiles, positionnés au-dessus de l'annuaire des conseillers
      (et de ses filtres) — demande explicite de l'utilisateur : « Au dessus
      de l'annuaire des conseillers ... on va positionner pour l'utilisateur
-     les contacts utiles pour sa section ». Toujours les 5 mêmes lignes pour
+     les contacts utiles pour sa section ». Toujours les mêmes lignes pour
      tout le monde (conseiller(e) simple ou président(e)/vice-président(e)
      de section) ; un second bloc, réservé à la présidence du CPH
      (isCphOfficer(profile.cphRole) — président(e) ET vice-président(e),
      voir échange avec l'utilisateur ci-dessous), ajoute les contacts
      institutionnels du CPH (dupliqués section par section, voir « Paramètres
      de la section » — ceux de la section de la personne qui regarde servent
-     de référence) ainsi que les greffiers de TOUTES les sections (ceux-ci
-     seuls nécessitent l'annuaire partagé, voir sharedDirActive ci-dessus). */
+     de référence) ainsi que la liste de TOUS les greffiers du CPH. */
   function ficheName(f){ return (f && [f.prenom, f.nom].filter(Boolean).join(" ")) || null; }
   var sc = state.sectionSettings.contacts;
+  var cphGreffiers = state.sectionSettings.cphGreffiers || [];
   var presSection = sectionRoleContact("president");
   var vicePresSection = sectionRoleContact("vice-president");
+  /* « Mon greffier » : le·s greffier·s du CPH affecté·s à MA PROPRE section
+     (échange avec l'utilisateur : « affecter à chaque greffier une ou
+     plusieurs sections... qui doit nourrir le champ "Mon greffier" dans
+     l'annuaire de l'utilisateur »). Une section peut en théorie avoir plus
+     d'un greffier affecté (un même greffier peut aussi couvrir plusieurs
+     sections) : chacun obtient sa propre ligne plutôt que de forcer un
+     agrégat en une seule ligne. */
+  var myGreffiers = cphGreffiers.filter(function(g){ return (g.sections||[]).indexOf(state.profile.section)!==-1; });
+  /* « Responsable vacations » : un seul greffier à la fois peut porter cette
+     étiquette (voir openAdminGreffierForm, enforcement au moment de
+     l'enregistrement) — visible de tout le monde, comme les autres lignes
+     de ce bloc commun (échange avec l'utilisateur : choix explicite
+     "Tout le monde", les vacations concernant chaque conseiller). */
+  var vacationsResponsable = cphGreffiers.filter(function(g){ return g.vacationsResponsable; })[0] || null;
   /* « Contacts utiles » et « Conseillers » sont désormais repliables (repliés
      par défaut), demande explicite de l'utilisateur une fois le bloc en place
      — un simple clic/Entrée sur le titre bascule l'affichage, voir
@@ -4742,7 +4943,14 @@ renderers["annuaire-cph"] = function(root){
   root.appendChild(collapseSectionHeader("Contacts utiles", "contacts"));
   if(!annuaireCphCollapse.contacts){
     var contactsPanel = h("div", {class:"panel"});
-    contactsPanel.appendChild(contactInfoRow("Greffier de section", ficheName(sc.greffier), sc.greffier));
+    if(!myGreffiers.length){
+      contactsPanel.appendChild(contactInfoRow("Mon greffier", null, null));
+    } else {
+      myGreffiers.forEach(function(g, i){
+        contactsPanel.appendChild(contactInfoRow(myGreffiers.length>1 ? "Mon greffier ("+(i+1)+")" : "Mon greffier", ficheName(g), g));
+      });
+    }
+    contactsPanel.appendChild(contactInfoRow("Responsable vacations", vacationsResponsable && ficheName(vacationsResponsable), vacationsResponsable));
     contactsPanel.appendChild(contactInfoRow("Président(e) de section", presSection && presSection.name, presSection));
     contactsPanel.appendChild(contactInfoRow("Vice-président(e) de section", vicePresSection && vicePresSection.name, vicePresSection));
     contactsPanel.appendChild(contactInfoRow("Président(e) du CPH", ficheName(sc.presidentCph), sc.presidentCph));
@@ -4770,23 +4978,25 @@ renderers["annuaire-cph"] = function(root){
       root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Contacts institutionnels du CPH"));
       root.appendChild(institPanel);
 
+      /* Greffiers de TOUT le CPH — lus directement depuis
+         state.sectionSettings.cphGreffiers (la liste partagée, propagée
+         identique à toutes les sections, voir defaultSectionSettings) :
+         plus besoin de l'annuaire partagé du CPH ni d'un chargement séparé
+         pour ce bloc, déjà disponible dès la simple synchronisation de
+         section — simplification par rapport à l'ancien mécanisme (fiche
+         "Greffier de section" republiée section par section dans
+         cphDirectory), qui souffrait du même piège que documenté ailleurs
+         (« Activer sans Enregistrer et synchroniser »). */
       root.appendChild(h("div", {class:"section-title", style:"margin-top:20px"}, "Greffiers de toutes les sections"));
       var greffiersPanel = h("div", {class:"panel"});
-      if(!sharedDirActive){
-        greffiersPanel.appendChild(h("div", {class:"footnote"}, "Nécessite que l'annuaire partagé du CPH soit activé par l'administrateur (Paramètres de la section)."));
-      } else if(annuaireCphState.status==="idle" || annuaireCphState.status==="loading"){
-        greffiersPanel.appendChild(h("div", {class:"footnote"}, "Chargement…"));
-      } else if(annuaireCphState.status==="error"){
-        greffiersPanel.appendChild(h("div", {class:"footnote"}, "Impossible de récupérer les greffiers pour le moment (connexion ?)."));
+      if(!cphGreffiers.length){
+        greffiersPanel.appendChild(h("div", {class:"footnote"}, "Aucun greffier enregistré pour l'instant — voir Paramètres de la section (espace administrateur) > Greffiers du CPH."));
       } else {
-        var greffiers = annuaireCphState.greffiers || [];
-        if(!greffiers.length){
-          greffiersPanel.appendChild(h("div", {class:"footnote"}, "Aucun greffier de section publié pour l'instant."));
-        } else {
-          greffiers.forEach(function(g){
-            greffiersPanel.appendChild(contactInfoRow(g.section, [g.prenom, g.nom].filter(Boolean).join(" ") || null, g));
-          });
-        }
+        cphGreffiers.forEach(function(g){
+          var sub = ficheName(g);
+          var sectionsLabel = (g.sections||[]).length ? (g.sections||[]).join(", ") : "Aucune section affectée";
+          greffiersPanel.appendChild(contactInfoRow(sectionsLabel+(g.vacationsResponsable ? " — Responsable vacations" : ""), sub, g));
+        });
       }
       root.appendChild(greffiersPanel);
     }
