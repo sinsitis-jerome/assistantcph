@@ -1,4 +1,3 @@
-<!doctype html><html lang="fr"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mon Assistant CPH</title>
@@ -493,7 +492,7 @@
   .search-wrap svg{ position:absolute; left:12px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--text-faint); }
   .month-nav-label svg{ width:14px; height:14px; color:var(--text-muted); flex:none; }
   .search-wrap input{ padding-left:34px; }
-</style></head><body>
+</style>
 
 <!-- ===================== ICONS (sprite) ===================== -->
 <svg width="0" height="0" style="position:absolute">
@@ -1273,7 +1272,40 @@ var DEFAULT_STATE = {
      exactement comme le code personnel d'un conseiller (même limite
      assumée : ne protège qu'un mauvais clic, pas un attaquant déterminé —
      la vraie protection vient du code long ci-dessus). */
-  greffierAccess:{ code:"", greffierName:"", sections:[], linkedAt:null }
+  greffierAccess:{ code:"", greffierName:"", sections:[], linkedAt:null },
+  /* Espace des référés (voir REFERE_SECTION_KEY et module RÉFÉRÉS DU CPH,
+     étape 1) — jonction côté référiste, étape 2. Entièrement séparé de
+     sync/profile.memberId ci-dessus, qui représentent la section
+     d'origine de la personne : un(e) référiste reste par ailleurs un(e)
+     conseiller(e) normal(e) de sa propre section, et cet espace se
+     rejoint UNE FOIS depuis Réglages, avec le code de l'espace des
+     référés (transmis par l'administrateur ou le/la responsable des
+     référés) puis sa propre fiche parmi les référistes déjà désignés —
+     voir openJoinRefereSheet/openPickMyRefereMemberSheet. sectionCode
+     vide = espace non rejoint. memberId : fiche choisie dans
+     refereMembers ci-dessous — jamais confondu avec profile.memberId
+     (fiche de la section d'origine). revoked : même principe que
+     sync.revoked, mais limité à cet espace (l'administrateur a retiré
+     cette personne de la liste des référistes) — ne bloque jamais l'accès
+     au reste de l'application, seulement à l'espace des référés (voir
+     applyRefereSyncPayloadToState). */
+  refereSync:{ sectionCode:"", memberId:null, lastSyncAt:null, revoked:false },
+  /* Copie locale, en lecture seule, de l'annuaire et du planning de
+     l'espace des référés (rapatriés par pullSectionSync comme pour une
+     vraie section) : sert uniquement à calculer myReferePlanning
+     ci-dessous ; jamais modifiée localement par un(e) simple référiste —
+     la gestion du planning des référés reste réservée au responsable des
+     référés/à l'administrateur (étape 3, à venir). */
+  refereMembers:[],
+  referePlanning:[],
+  /* Planning personnel dérivé de referePlanning/refereMembers ci-dessus,
+     filtré sur les seules audiences de référé où cette personne apparaît
+     (président ou assesseur) — même principe que myPlanning, mais
+     calculé depuis l'espace des référés plutôt que depuis la section
+     d'origine (voir syncMyReferePlanning). Fusionné avec myPlanning.entries
+     à l'affichage de « Mon planning » (voir renderers["mon-planning"]),
+     chaque entrée étant étiquetée « Référé » pour rester distinguable. */
+  myReferePlanning:{ importedAt:null, entries:[] }
 };
 
 function migrate(parsed){
@@ -1525,6 +1557,74 @@ function migrate(parsed){
       s.greffierAccess.sections = Array.isArray(ga.sections) ? ga.sections.filter(function(x){
         return x && typeof x==="object" && typeof x.name==="string" && typeof x.sectionCode==="string";
       }).map(function(x){ return {name:x.name, sectionCode:x.sectionCode}; }) : [];
+    }
+    if(parsed.refereSync && typeof parsed.refereSync==="object"){
+      var rs = parsed.refereSync;
+      s.refereSync.sectionCode = typeof rs.sectionCode==="string" ? rs.sectionCode : "";
+      s.refereSync.memberId = typeof rs.memberId==="string" && rs.memberId ? rs.memberId : null;
+      s.refereSync.lastSyncAt = typeof rs.lastSyncAt==="string" ? rs.lastSyncAt : null;
+      s.refereSync.revoked = rs.revoked===true;
+    }
+    /* Même forme de fiche que dans l'espace administrateur des référés
+       (voir startAddReferiste) : origineSection/origineMemberId conservés
+       tels quels (purement informatifs côté référiste), sectionRole limité
+       à "president" (Responsable des référés) ou null. */
+    if(Array.isArray(parsed.refereMembers)){
+      s.refereMembers = parsed.refereMembers.map(function(m){
+        return {
+          id: typeof m.id==="string" && m.id ? m.id : uid(),
+          nom: typeof m.nom==="string" ? m.nom : "",
+          prenom: typeof m.prenom==="string" ? m.prenom : "",
+          college: typeof m.college==="string" ? m.college : "",
+          syndicat: typeof m.syndicat==="string" ? m.syndicat : "",
+          email: typeof m.email==="string" ? m.email : "",
+          tel: typeof m.tel==="string" ? m.tel : "",
+          origineSection: typeof m.origineSection==="string" ? m.origineSection : "",
+          origineMemberId: typeof m.origineMemberId==="string" ? m.origineMemberId : "",
+          pinHash: (typeof m.pinHash==="string" && m.pinHash) ? m.pinHash : null,
+          sectionRole: m.sectionRole==="president" ? "president" : null
+        };
+      });
+    }
+    /* Enregistrements bruts de l'espace des référés, mêmes champs qu'une
+       ligne de state.planning (voir plus haut) mais sans restreindre le
+       type à PLANNING_TYPES : le planning des référés (étape 3, à venir)
+       aura son propre type, hors de cette liste réservée aux audiences de
+       section. president/assesseurs restent des identifiants (ceux de
+       refereMembers ci-dessus), résolus à l'affichage par
+       resolveRefereMemberForDisplay. */
+    if(Array.isArray(parsed.referePlanning)){
+      var refDateRe = /^\d{4}-\d{2}-\d{2}$/;
+      s.referePlanning = parsed.referePlanning.map(function(pl){
+        return {
+          id: typeof pl.id==="string" && pl.id ? pl.id : uid(),
+          type: typeof pl.type==="string" && pl.type ? pl.type : "refere",
+          date: typeof pl.date==="string" && refDateRe.test(pl.date) ? pl.date : "",
+          college: COLLEGES.indexOf(pl.college)!==-1 ? pl.college : "",
+          presidence: COLLEGES.indexOf(pl.presidence)!==-1 ? pl.presidence : "",
+          president: typeof pl.president==="string" && pl.president ? pl.president : null,
+          assesseurs: Array.isArray(pl.assesseurs) ? pl.assesseurs.filter(function(a){ return typeof a==="string" && a; }).slice(0,2) : []
+        };
+      }).filter(function(pl){ return pl.date; });
+    }
+    if(parsed.myReferePlanning && typeof parsed.myReferePlanning==="object"){
+      var mrp = parsed.myReferePlanning;
+      s.myReferePlanning.importedAt = typeof mrp.importedAt==="string" ? mrp.importedAt : null;
+      var mrpDateRe = /^\d{4}-\d{2}-\d{2}$/;
+      function sanitizeRefereNameObj(o){
+        return (o && typeof o==="object") ? { nom: typeof o.nom==="string" ? o.nom : "", prenom: typeof o.prenom==="string" ? o.prenom : "", college: COLLEGES.indexOf(o.college)!==-1 ? o.college : "" } : null;
+      }
+      s.myReferePlanning.entries = Array.isArray(mrp.entries) ? mrp.entries.map(function(e){
+        return {
+          type: typeof e.type==="string" && e.type ? e.type : "refere",
+          date: typeof e.date==="string" && mrpDateRe.test(e.date) ? e.date : "",
+          college: COLLEGES.indexOf(e.college)!==-1 ? e.college : "",
+          presidence: COLLEGES.indexOf(e.presidence)!==-1 ? e.presidence : "",
+          president: sanitizeRefereNameObj(e.president),
+          assesseurs: Array.isArray(e.assesseurs) ? e.assesseurs.map(sanitizeRefereNameObj).filter(Boolean) : [],
+          role: e.role==="president" ? "president" : "assesseur"
+        };
+      }).filter(function(e){ return e.date; }) : [];
     }
     /* migrate() n'est appelé que lorsqu'un état existait déjà en local
        (voir loadState) : une installation qui date d'avant le parcours
@@ -2347,6 +2447,27 @@ var adminMemberPins = {};
    régénération — voir openAdminGreffierForm et loadPersistedAdminPins. Clé
    = id du greffier (cphGreffiers[].id), valeur = code d'accès en clair. */
 var adminGreffierPins = {};
+
+/* RÉFÉRÉS — voir échange avec l'utilisateur (« comment pourrait-on intégrer
+   les référés... »). Modélisés comme une SECTION À PART ENTIÈRE, réservée
+   au niveau du CPH plutôt qu'à une section précise, réutilisant tel quel le
+   mécanisme sections/{code} déjà en place (mêmes fonctions
+   pushSectionSyncPayload/registerSectionInAdminRegistry/lookupAdminRegistry
+   /openAdminSection que pour une section normale) : chaque référiste, quelle
+   que soit sa section d'origine, est une entrée de plus dans
+   adminBuffer.sectionMembers de CETTE section réservée, avec son propre code
+   personnel (même coffre adminMemberPins, adressé par cph+section comme
+   d'habitude — aucune collision possible, "__referes__" n'est jamais un nom
+   de section réel, voir SECTIONS). Choix délibéré plutôt qu'un champ diffusé
+   dans sectionSettings (comme cphGreffiers) : les référés ont besoin
+   d'écritures directes par des acteurs qui NE SONT PAS l'administrateur (le
+   ou la responsable des référés, puis — plus tard — les référistes
+   eux-mêmes pour leurs échanges), ce qu'un champ propagé UNIQUEMENT par
+   l'administrateur ne permettrait pas. Un seul "responsable des référés" à
+   la fois : réutilise sectionRole==="president" en interne (même
+   enforcement à un seul titulaire que pour une vraie présidence de section),
+   simplement ré-étiqueté "Responsable des référés" dans cet écran précis. */
+var REFERE_SECTION_KEY = "__referes__";
 
 function hashAdminCode(code){
   var data = new TextEncoder().encode("admin-code|"+code);
@@ -3380,6 +3501,289 @@ function disableSectionSync(){
 }
 
 /* =================================================================
+   ESPACE DES RÉFÉRÉS — CÔTÉ RÉFÉRISTE (étape 2)
+   ------------------------------------------------------------------
+   Suite de « RÉFÉRÉS DU CPH » (module ADMINISTRATION GÉNÉRALE, étape 1,
+   voir REFERE_SECTION_KEY) : un(e) référiste rejoint ici, depuis Réglages,
+   le même espace réservé "__referes__" qu'un(e) simple conseiller(e)
+   rejoint une section (même code+PIN, voir openJoinSectionSyncSheet/
+   openPickMyMemberSheet plus haut, ici volontairement dupliqués plutôt que
+   réutilisés tels quels) — mais entièrement séparé de state.sync et
+   state.profile.memberId : un(e) référiste reste par ailleurs un(e)
+   conseiller(e) normal(e) de sa propre section, les deux espaces ne se
+   mélangent jamais, ni dans l'état local ni dans l'interface. Une fois la
+   fiche choisie (state.refereSync.memberId), les audiences de référé la
+   concernant sont automatiquement fusionnées dans « Mon planning »,
+   étiquetées « Référé » (voir renderers["mon-planning"] et
+   syncMyReferePlanning ci-dessous) — décision de l'utilisateur, plutôt
+   qu'un écran séparé. La gestion du planning des référés lui-même
+   (création/modification d'audiences, affectation d'un binôme) reste
+   réservée au responsable des référés/à l'administrateur : une étape
+   suivante, non encore construite. */
+
+/* Applique un payload rapatrié depuis l'espace des référés à
+   refereMembers/referePlanning — jamais à sectionMembers/planning (voir
+   commentaire de refereSync dans DEFAULT_STATE : les deux espaces
+   restent strictement indépendants). Détecte, sur le même principe
+   qu'applySyncPayloadToState, le retrait de cette personne de la liste
+   des référistes par l'administrateur : verrouille alors SEULEMENT
+   l'espace des référés (refereSync.revoked), sans jamais toucher au
+   reste de l'application — une personne retirée de la liste des
+   référistes reste un(e) conseiller(e) normal(e) comme avant. */
+function applyRefereSyncPayloadToState(payload){
+  var incomingMembers = (payload && Array.isArray(payload.sectionMembers)) ? payload.sectionMembers : [];
+  var myId = state.refereSync.memberId;
+  var stillListed = !myId || incomingMembers.some(function(m){ return m.id===myId; });
+  if(!stillListed){
+    state.refereSync.revoked = true;
+    state.refereMembers = [];
+    state.referePlanning = [];
+    state.myReferePlanning = clone(DEFAULT_STATE.myReferePlanning);
+    return;
+  }
+  state.refereMembers = incomingMembers;
+  state.referePlanning = (payload && Array.isArray(payload.planning)) ? payload.planning : [];
+}
+
+function markRefereSyncDone(){
+  state.refereSync.lastSyncAt = new Date().toISOString();
+  saveState();
+}
+
+/* Équivalent, pour l'espace des référés, de resolveMemberForExport : forme
+   affichable (nom/prénom/collège) d'un président ou assesseur d'audience
+   de référé, à partir de son identifiant dans refereMembers. */
+function resolveRefereMemberForDisplay(id){
+  if(!id) return null;
+  var m = state.refereMembers.filter(function(x){ return x.id===id; })[0];
+  return m ? { nom:m.nom||"", prenom:m.prenom||"", college:m.college||"" } : null;
+}
+
+/* Recalcule state.myReferePlanning depuis referePlanning/refereMembers
+   (copie locale rapatriée par pullSectionSync), sur le même principe que
+   applyMyPlanningImport : ne retient que les audiences où la fiche
+   choisie (refereSync.memberId) apparaît, complétées par leur « pendant »
+   (même date/type, collège opposé) pour afficher le binôme complet — un
+   audience de référé est toujours tenue à deux, comme un BCO (voir
+   échange avec l'utilisateur). Contrairement à applyMyPlanningImport, la
+   reconnaissance se fait ici par identifiant (fiche choisie explicitement
+   via code personnel — voir openPickMyRefereMemberSheet) plutôt que par
+   nom : fiable même si le nom saisi dans le profil « section d'origine »
+   diverge de celui enregistré côté référés. */
+function syncMyReferePlanning(){
+  if(!state.refereSync.sectionCode || !state.refereSync.memberId || state.refereSync.revoked) return false;
+  var myId = state.refereSync.memberId;
+  var records = state.referePlanning || [];
+  var entries = [];
+  records.forEach(function(p){
+    if(!p || !p.date) return;
+    var role = p.president===myId ? "president" : ((p.assesseurs||[]).indexOf(myId)!==-1 ? "assesseur" : null);
+    if(!role) return;
+    var counterpart = records.filter(function(o){
+      return o!==p && o.date===p.date && (o.type||"refere")===(p.type||"refere") && (o.college||"")!==(p.college||"");
+    })[0] || null;
+    var presidingRec = (p.college||"")===(p.presidence||"") ? p : (counterpart && (counterpart.college||"")===(counterpart.presidence||"") ? counterpart : null);
+    var assesseurs = (p.assesseurs||[]).map(resolveRefereMemberForDisplay);
+    if(counterpart){ assesseurs = assesseurs.concat((counterpart.assesseurs||[]).map(resolveRefereMemberForDisplay)); }
+    entries.push({
+      type: p.type||"refere", date: p.date, college: p.college||"", presidence: p.presidence||"",
+      president: presidingRec ? resolveRefereMemberForDisplay(presidingRec.president) : null,
+      assesseurs: assesseurs.filter(Boolean),
+      role: role
+    });
+  });
+  state.myReferePlanning = { importedAt: new Date().toISOString(), entries: entries };
+  return true;
+}
+
+/* Rejoindre l'espace des référés — même geste que rejoindre une section
+   (coller un code, puis choisir sa fiche via son code personnel), mais
+   vers l'espace réservé REFERE_SECTION_KEY et jamais vers
+   state.sync/state.sectionMembers. Le code attendu ici est précisément
+   celui affiché par l'administrateur dans « Référés du CPH » (voir
+   renderAdminReferesLanding/openAdminReferisteForm) — un code de section
+   normale est explicitement rejeté (result.section doit valoir
+   REFERE_SECTION_KEY) pour éviter toute confusion entre les deux espaces. */
+function openJoinRefereSheet(onJoined){
+  if(!syncAvailable()){ toast("Synchronisation indisponible pour le moment (vérifiez votre connexion)."); return; }
+  var codeInput = h("input", {type:"text", placeholder:"Collez le code des référés", style:"font-family:monospace"});
+  openSheet("Rejoindre l'espace des référés", h("div", null,
+    h("p", {class:"lede"}, "Collez ici le code que vous a transmis l'administrateur ou le/la responsable des référés."),
+    codeInput,
+    h("button", {class:"sheet-btn accent", style:"margin-top:12px", onclick:function(){
+      var code = codeInput.value.trim();
+      if(!code){ toast("Merci de saisir un code."); return; }
+      pullSectionSync(code).then(function(result){
+        if(!result || result.section!==REFERE_SECTION_KEY){
+          toast("Aucun espace des référés trouvé pour ce code — vérifiez qu'il est correctement recopié.");
+          return;
+        }
+        applyRefereSyncPayloadToState(result.payload);
+        state.refereSync.sectionCode = code;
+        markRefereSyncDone();
+        closeSheet();
+        toast("Espace des référés rejoint.");
+        render(navStack[navStack.length-1]);
+        openPickMyRefereMemberSheet(onJoined);
+      }).catch(function(){
+        toast("Échec de la récupération — vérifiez votre connexion, puis réessayez.");
+      });
+    }}, "Rejoindre"),
+    h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler")
+  ));
+}
+
+/* Choix de sa propre fiche parmi les référistes déjà désignés par
+   l'administrateur (jamais de saisie manuelle, voir startAddReferiste
+   côté administrateur) — même mécanique de code personnel à 4 chiffres
+   que openPickMyMemberSheet, mais posant state.refereSync.memberId
+   plutôt que state.profile.memberId : ne touche jamais au profil de la
+   section d'origine. */
+function openPickMyRefereMemberSheet(onDone){
+  var searchVal = "";
+  var listBox = h("div", {style:"margin-top:12px"});
+
+  function selectMember(m){
+    state.refereSync.memberId = m.id;
+    state.refereSync.revoked = false;
+    saveState();
+    closeSheet();
+    toast("Fiche liée à « "+memberDisplayName(m)+" » dans l'espace des référés.");
+    render(navStack[navStack.length-1]);
+    if(onDone) onDone(m);
+  }
+
+  function requestPinThenSelect(m){
+    if(!m.pinHash){ selectMember(m); return; }
+    var pinInput = h("input", {type:"tel", inputmode:"numeric", maxlength:"4", placeholder:"Code à 4 chiffres", style:"font-family:monospace; letter-spacing:6px; text-align:center; font-size:1.15rem;"});
+    var errBox = h("div", {class:"footnote", style:"min-height:1.2em; margin-top:6px"});
+    openSheet("Code personnel de "+(memberDisplayName(m) || "cette fiche"), h("div", null,
+      h("p", {class:"lede"}, "Cette fiche est protégée par un code à 4 chiffres, transmis en privé par l'administrateur ou le/la responsable des référés. Saisissez-le pour confirmer qu'il s'agit bien de vous."),
+      pinInput,
+      errBox,
+      h("button", {class:"sheet-btn accent", style:"margin-top:12px", onclick:function(){
+        var entered = pinInput.value.trim();
+        if(!/^\d{4}$/.test(entered)){ errBox.textContent = "Entrez les 4 chiffres du code."; return; }
+        hashMemberPin(entered, m.id).then(function(hash){
+          if(hash===m.pinHash){ selectMember(m); }
+          else { errBox.textContent = "Code incorrect — demandez-le à l'administrateur ou au/à la responsable des référés si besoin."; }
+        });
+      }}, "Confirmer"),
+      h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ openPickMyRefereMemberSheet(onDone); }}, "Retour à la liste")
+    ));
+  }
+
+  function renderList(){
+    clear(listBox);
+    var q = normName(searchVal);
+    var filtered = state.refereMembers.filter(function(m){
+      return !q || normName(memberDisplayName(m)).indexOf(q)!==-1;
+    }).sort(memberSortCompare);
+    if(filtered.length===0){
+      listBox.appendChild(h("p", {class:"footnote"}, "Aucun référiste enregistré pour l'instant."));
+      return;
+    }
+    var panel = h("div", {class:"panel"});
+    filtered.forEach(function(m){
+      var sub = [m.origineSection, m.college].filter(Boolean).join(" · ");
+      panel.appendChild(h("div", {class:"row-click", onclick:function(){ requestPinThenSelect(m); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
+          h("div", {class:"rc-sub"}, sub || "—")
+        ),
+        icon("ic-chev", "chev")
+      ));
+    });
+    listBox.appendChild(panel);
+  }
+
+  var searchInput = h("input", {type:"text", placeholder:"Rechercher un nom…", style:"margin-top:8px"});
+  searchInput.addEventListener("input", function(e){ searchVal = e.target.value; renderList(); });
+
+  renderList();
+  openSheet("Qui êtes-vous parmi les référistes ?", h("div", null,
+    h("p", {class:"lede"}, "Choisissez votre fiche dans la liste des référistes : vos audiences de référé apparaîtront automatiquement dans « Mon planning »."),
+    searchInput,
+    listBox,
+    h("button", {class:"sheet-btn ghost", style:"margin-top:12px", onclick:function(){
+      closeSheet();
+      toast("Vous pourrez choisir votre fiche plus tard, depuis Réglages.");
+      render(navStack[navStack.length-1]);
+      if(onDone) onDone(null);
+    }}, "Je ne trouve pas mon nom")
+  ));
+}
+
+/* Récupération manuelle du planning des référés — bouton de secours en
+   Réglages (voir renderers["settings"]), en plus de l'actualisation
+   automatique (maybeAutoPullReferePlanning ci-dessous). Contrairement à
+   confirmAndPullSection, aucune confirmation n'est nécessaire : cette
+   copie locale (refereMembers/referePlanning) n'est jamais modifiée par
+   un(e) simple référiste, il n'y a donc jamais de saisie locale à perdre. */
+function confirmAndPullReferePlanning(returnScreen){
+  if(!syncAvailable()){ toast("Synchronisation indisponible pour le moment (vérifiez votre connexion)."); return; }
+  pullSectionSync(state.refereSync.sectionCode).then(function(result){
+    if(!result){ toast("Aucune donnée trouvée pour ce code."); return; }
+    applyRefereSyncPayloadToState(result.payload);
+    saveState();
+    if(state.refereSync.revoked){
+      toast("Vous avez été retiré(e) de la liste des référistes.");
+      render(returnScreen || "settings");
+      return;
+    }
+    markRefereSyncDone();
+    toast("Planning des référés actualisé.");
+    render(returnScreen || "settings");
+  }).catch(function(){
+    toast("Échec de la récupération — vérifiez votre connexion.");
+  });
+}
+
+/* Quitte localement l'espace des référés (l'inverse de openJoinRefereSheet) :
+   n'affecte en rien la section d'origine ni le reste du profil. Le code
+   des référés reste valable pour rejoindre à nouveau plus tard (aucune
+   révocation côté administrateur). */
+function disableRefereSync(){
+  openSheet("Quitter l'espace des référés", h("div", null,
+    h("p", {class:"lede"}, "Vous ne verrez plus vos audiences de référé dans « Mon planning ». Vous pourrez revenir plus tard avec le même code."),
+    h("button", {class:"sheet-btn danger", onclick:function(){
+      state.refereSync = clone(DEFAULT_STATE.refereSync);
+      state.refereMembers = [];
+      state.referePlanning = [];
+      state.myReferePlanning = clone(DEFAULT_STATE.myReferePlanning);
+      saveState();
+      closeSheet(); toast("Espace des référés quitté."); render("settings");
+    }}, "Quitter"),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+  ));
+}
+
+/* Actualisation automatique et silencieuse, sur le même principe que
+   maybeAutoPullSection (voir plus haut) mais sans la garde anti-écrasement
+   « isDirty » : cette copie locale n'étant jamais modifiée par un(e)
+   simple référiste, il n'y a jamais de risque à la remplacer par la
+   dernière version distante. Déclenchée aux mêmes moments (voir les
+   appels ci-dessous et dans go()). */
+var lastRefereAutoPullAttemptAt = 0;
+function maybeAutoPullReferePlanning(force){
+  if(!state.refereSync.sectionCode || state.refereSync.revoked || !syncAvailable()) return;
+  var now = Date.now();
+  if(!force && now-lastRefereAutoPullAttemptAt < AUTO_PULL_MIN_GAP_MS) return;
+  lastRefereAutoPullAttemptAt = now;
+  pullSectionSync(state.refereSync.sectionCode).then(function(result){
+    if(!result) return;
+    applyRefereSyncPayloadToState(result.payload);
+    markRefereSyncDone();
+    var current = navStack[navStack.length-1];
+    if(current==="mon-planning" || current==="settings") render(current);
+  }).catch(function(err){
+    if(window.console && console.warn) console.warn("Chargement automatique du planning des référés impossible :", err);
+  });
+}
+window.addEventListener("fb-sync-ready", function(){ maybeAutoPullReferePlanning(); });
+setInterval(maybeAutoPullReferePlanning, AUTO_PULL_INTERVAL_MS);
+
+/* =================================================================
    CAPACITÉS (downloads)
    ================================================================= */
 var downloadsCap = null;
@@ -3754,6 +4158,7 @@ function go(screenId, replace){
      anti-écrasement, et sans excès grâce à AUTO_PULL_MIN_GAP_MS qui
      absorbe les navigations rapprochées. */
   maybeAutoPullSection();
+  maybeAutoPullReferePlanning();
 }
 function goBack(){
   if(navStack.length>1){ hideToastNow(); navStack.pop(); render(navStack[navStack.length-1]); }
@@ -4443,6 +4848,18 @@ function adminSectionSaveReminder(){
 renderers["sysadmin-section"] = function(root){
   if(!requireAdminBuffer(root)) return;
 
+  /* Espace des référés (voir REFERE_SECTION_KEY plus haut) : même écran
+     "sysadmin-section", mais un atterrissage entièrement différent — pas de
+     "Paramètres de la section" ni de code président/vice-président, juste
+     la liste des référistes pour l'instant (le planning des référés viendra
+     dans une étape suivante). openAdminSection() ne distingue jamais une
+     section réservée d'une section réelle : c'est ce test, ici, qui fait
+     toute la différence. */
+  if(adminBuffer.section===REFERE_SECTION_KEY){
+    renderAdminReferesLanding(root);
+    return;
+  }
+
   var wrap = h("div", {class:"home-wrap"});
   wrap.appendChild(h("div", {class:"hero"},
     h("div", {class:"eyebrow"}, adminBuffer.cph),
@@ -4481,6 +4898,20 @@ renderers["sysadmin-section"] = function(root){
   cardsPanel.appendChild(sectionCard("ic-calendar", "Planning de la section", adminBuffer.planning.length ? (adminBuffer.planning.length+(adminBuffer.planning.length>1 ? " dates enregistrées" : " date enregistrée")) : "Aucune date enregistrée", "sysadmin-section-planning"));
   cardsPanel.appendChild(sectionCard("ic-gear", "Paramètres de la section", "Liens utiles, horaires par défaut, contacts", "sysadmin-section-settings"));
   cardsPanel.appendChild(sectionCard("ic-building", "Greffiers du CPH", (adminBuffer.sectionSettings.cphGreffiers||[]).length ? ((adminBuffer.sectionSettings.cphGreffiers||[]).length+((adminBuffer.sectionSettings.cphGreffiers||[]).length>1 ? " greffiers enregistrés" : " greffier enregistré")) : "Aucun greffier enregistré", "sysadmin-cph-greffiers"));
+  /* Pas un simple sectionCard(...) : contrairement aux trois cartes
+     ci-dessus (qui naviguent dans CETTE MÊME section), "Référés du CPH"
+     bascule adminBuffer vers une section réservée différente (voir
+     REFERE_SECTION_KEY) — il faut d'abord savoir si elle existe déjà pour
+     ce CPH (registre) avant de savoir où aller. */
+  cardsPanel.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:openAdminReferesEntry,
+      onkeydown:function(e){ if(e.key==="Enter") openAdminReferesEntry(); }},
+    h("div", {class:"ic"}, icon("ic-scale")),
+    h("div", {class:"rc-main"},
+      h("div", {class:"rc-title"}, "Référés du CPH"),
+      h("div", {class:"rc-sub"}, "Référistes de toutes les sections et leur planning")
+    ),
+    icon("ic-chev", "chev")
+  ));
   root.appendChild(cardsPanel);
 
   var actions = h("div", {style:"margin-top:20px; display:flex; flex-direction:column; gap:8px"});
@@ -4507,6 +4938,208 @@ renderers["sysadmin-section"] = function(root){
   }}, "Changer de section"));
   root.appendChild(actions);
 };
+
+/* =================================================================
+   RÉFÉRÉS DU CPH — étape 1 (voir REFERE_SECTION_KEY plus haut) : le
+   modèle de données et l'écran administrateur pour créer l'espace des
+   référés et gérer qui en fait partie / qui en est responsable. Le
+   planning des référés lui-même (créer/modifier une audience, l'affecter
+   à un binôme) et l'espace côté référiste (rejoindre, voir ses audiences
+   dans « Mon planning », échanger) viendront dans une étape suivante —
+   voir échange avec l'utilisateur.
+   ------------------------------------------------------------------- */
+
+/* Point d'entrée depuis N'IMPORTE QUELLE section administrée (voir la
+   carte "Référés du CPH" ci-dessus) : cherche d'abord si l'espace des
+   référés existe déjà pour ce CPH (même registre que pour une section
+   normale), et bascule adminBuffer dessus si oui — exactement comme
+   "Changer de section", simplement automatique plutôt que via le
+   sélecteur CPH+section. */
+function openAdminReferesEntry(){
+  var cph = adminBuffer.cph;
+  lookupAdminRegistry(adminSessionCode, cph, REFERE_SECTION_KEY).then(function(code){
+    if(code){ openAdminSection(cph, REFERE_SECTION_KEY, code); }
+    else { openAdminReferesCreateConfirm(cph); }
+  }).catch(function(){
+    toast("Impossible d'interroger le registre pour le moment (connexion ?).");
+  });
+}
+function openAdminReferesCreateConfirm(cph){
+  openSheet("Référés du CPH", h("div", null,
+    h("p", {class:"lede"}, "Aucun espace référés n'existe encore pour "+cph+". Le créer permettra de désigner des référistes dans n'importe quelle section, puis — bientôt — de gérer leur planning."),
+    h("button", {class:"sheet-btn accent", onclick:function(){ createReferesSection(cph); }}, "Créer l'espace des référés"),
+    h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler")
+  ));
+}
+/* Contrairement à openAdminCreateSectionSheet (une vraie section démarre
+   toujours avec la fiche de son président), l'espace des référés démarre
+   volontairement VIDE : les référistes n'existent jamais qu'en tant que
+   copies de conseillers déjà inscrits ailleurs (voir startAddReferiste),
+   jamais saisis à la main ici. */
+function createReferesSection(cph){
+  var code = generateSectionCode();
+  pushSectionSyncPayload(code, cph, REFERE_SECTION_KEY, {sectionMembers:[], planning:[]}).then(function(){
+    return registerSectionInAdminRegistry(adminSessionCode, cph, REFERE_SECTION_KEY, code);
+  }).then(function(){
+    closeSheet();
+    openAdminSection(cph, REFERE_SECTION_KEY, code);
+  }).catch(function(){
+    toast("Impossible de créer l'espace des référés pour le moment (connexion ?).");
+  });
+}
+
+function renderAdminReferesLanding(root){
+  var wrap = h("div", {class:"home-wrap"});
+  wrap.appendChild(h("div", {class:"hero"},
+    h("div", {class:"eyebrow"}, adminBuffer.cph),
+    h("h1", null, "Référés"),
+    h("p", null, "Référistes de toutes les sections — le planning des référés viendra dans une prochaine étape. « Enregistrer et synchroniser » reste disponible pour forcer l'envoi immédiatement.")
+  ));
+  root.appendChild(wrap);
+
+  if(!adminBuffer.loaded){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement…")));
+    return;
+  }
+
+  var codePanel = h("div", {class:"panel"});
+  codePanel.appendChild(h("div", {class:"info-row"},
+    h("div", {class:"info-label"}, "Code des référés"),
+    h("div", {class:"info-value", style:"font-family:var(--font-mono)"}, adminBuffer.sectionCode)
+  ));
+  codePanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ copyText(adminBuffer.sectionCode); }}, "Copier le code"));
+  root.appendChild(codePanel);
+
+  root.appendChild(h("div", {class:"section-title"}, "Référistes"));
+  var list = h("div", {class:"panel"});
+  if(!adminBuffer.sectionMembers.length){
+    list.appendChild(h("div", {class:"footnote"}, "Aucun référiste enregistré."));
+  } else {
+    adminBuffer.sectionMembers.slice().sort(memberSortCompare).forEach(function(m){
+      var sub = [m.origineSection, m.college].filter(Boolean).join(" · ")+(m.sectionRole==="president" ? " — Responsable des référés" : "");
+      list.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){ openAdminReferisteForm(m); },
+          onkeydown:function(e){ if(e.key==="Enter") openAdminReferisteForm(m); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, memberDisplayName(m) || "(Sans nom)"),
+          h("div", {class:"rc-sub"}, sub)
+        ),
+        icon("ic-chev", "chev")
+      ));
+    });
+  }
+  root.appendChild(list);
+  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:startAddReferiste}, "+ Ajouter un référiste"));
+
+  var actions = h("div", {style:"margin-top:20px; display:flex; flex-direction:column; gap:8px"});
+  var saveBtn;
+  actions.appendChild(saveBtn = h("button", {class:"sheet-btn accent", onclick:function(){
+    saveBtn.disabled = true;
+    clearAdminAutoPush();
+    pushAdminBuffer().then(function(){
+      saveBtn.disabled = false;
+      toast("Modifications envoyées.");
+    }).catch(function(){
+      saveBtn.disabled = false;
+      toast("Envoi impossible pour le moment (connexion ?).");
+    });
+  }}, "Enregistrer et synchroniser"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){
+    adminBuffer.loaded = false; render("sysadmin-section"); refreshAdminBuffer();
+  }}, "Recharger depuis les référés (annule les modifications non envoyées)"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){
+    adminBuffer = null; clearAdminAutoPush(); go("sysadmin-panel", true);
+  }}, "Changer de section"));
+  root.appendChild(actions);
+}
+
+/* Un référiste n'est JAMAIS saisi à la main : toujours choisi parmi les
+   conseillers déjà inscrits dans une section réelle (openCrossSectionMemberPicker,
+   déjà utilisé pour les officiers du CPH et les greffiers), dont on copie
+   les coordonnées telles quelles — même limite assumée qu'ailleurs dans
+   l'application (une correction ultérieure de sa fiche d'origine ne se
+   répercute pas ici automatiquement ; retirer puis rajouter le référiste
+   rafraîchit la copie). origineMemberId permet de repérer un doublon si
+   l'administrateur choisit deux fois le même conseiller. */
+function startAddReferiste(){
+  openCrossSectionMemberPicker(adminBuffer.cph, function(m, section){
+    var already = adminBuffer.sectionMembers.some(function(x){ return x.origineMemberId===m.id; });
+    if(already){ toast("Ce conseiller est déjà référiste."); return; }
+    var entry = {
+      id: uid(), nom: m.nom||"", prenom: m.prenom||"", college: m.college||"",
+      syndicat: m.syndicat||"", email: m.email||"", tel: m.tel||"",
+      origineSection: section, origineMemberId: m.id, sectionRole: null, pinHash: null
+    };
+    var pin = generateMemberPin();
+    hashMemberPin(pin, entry.id).then(function(hash){
+      entry.pinHash = hash;
+      adminMemberPins[entry.id] = pin;
+      adminBuffer.sectionMembers.push(entry);
+      var pinUpdate = {}; pinUpdate[entry.id] = pin;
+      persistAdminPins(adminBuffer.cph, adminBuffer.section, pinUpdate);
+      scheduleAdminAutoPush();
+      render("sysadmin-section");
+      toast("Référiste ajouté.");
+      openAdminReferisteForm(entry);
+    });
+  });
+}
+
+/* Fiche d'un référiste — toujours en modification (jamais de création à la
+   main, voir startAddReferiste ci-dessus) : coordonnées en lecture seule
+   (copiées à l'ajout), fonction "Responsable des référés" (un seul titulaire
+   à la fois, même enforcement que "Responsable vacations"/"Fonction en
+   section" ailleurs — réutilise sectionRole==="president" en interne, voir
+   REFERE_SECTION_KEY), et les deux codes à transmettre pour rejoindre
+   l'espace des référés (fonctionnalité de jonction à venir). */
+function openAdminReferisteForm(entry){
+  var form = h("div", null);
+
+  var infoPanel = h("div", {class:"panel"});
+  infoPanel.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, "Nom"), h("div", {class:"info-value"}, memberDisplayName(entry) || "(Sans nom)")));
+  infoPanel.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, "Section d'origine"), h("div", {class:"info-value"}, entry.origineSection||"—")));
+  infoPanel.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, "Collège"), h("div", {class:"info-value"}, entry.college||"—")));
+  infoPanel.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, "Syndicat"), h("div", {class:"info-value"}, entry.syndicat||"—")));
+  infoPanel.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, "Téléphone"), h("div", {class:"info-value"}, entry.tel ? formatTelFR(entry.tel) : "—")));
+  infoPanel.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, "Email"), h("div", {class:"info-value"}, entry.email||"—")));
+  form.appendChild(infoPanel);
+  form.appendChild(h("p", {class:"footnote"}, "Coordonnées reprises de sa fiche d'origine au moment de l'ajout — pour les mettre à jour, retirez ce référiste puis ajoutez-le à nouveau."));
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Fonction"));
+  var respCb = h("input", {type:"checkbox", checked: entry.sectionRole==="president" ? "checked" : null});
+  form.appendChild(h("label", {style:"display:flex; align-items:center; gap:8px; padding:6px 0;"}, respCb, h("span", null, "Responsable des référés")));
+  form.appendChild(h("div", {class:"footnote"}, "Un seul responsable à la fois : le cocher ici retire automatiquement cette fonction à quiconque la portait déjà. Pourra gérer le planning des référés (fonctionnalité à venir)."));
+
+  var codePanel = h("div", {class:"panel", style:"margin-top:14px"});
+  var pin = adminMemberPins[entry.id];
+  codePanel.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, "Code des référés"), h("div", {class:"info-value", style:"font-family:var(--font-mono)"}, adminBuffer.sectionCode)));
+  codePanel.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, "Code personnel"), h("div", {class:"info-value", style:"font-family:var(--font-mono)"}, pin || "—")));
+  codePanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ copyText(adminBuffer.sectionCode+" / "+(pin||"")); }}, "Copier les deux codes"));
+  form.appendChild(codePanel);
+  form.appendChild(h("p", {class:"footnote"}, "À transmettre en privé (SMS, email…) — permettra à ce référiste de rejoindre l'espace des référés depuis Réglages (fonctionnalité à venir)."));
+
+  var actions = h("div", {style:"margin-top:18px"});
+  actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
+    var makeResponsable = !!respCb.checked;
+    adminBuffer.sectionMembers = adminBuffer.sectionMembers.map(function(x){
+      if(x.id===entry.id) return Object.assign({}, x, {sectionRole: makeResponsable ? "president" : null});
+      if(makeResponsable && x.sectionRole==="president") return Object.assign({}, x, {sectionRole:null});
+      return x;
+    });
+    scheduleAdminAutoPush();
+    closeSheet(); render("sysadmin-section");
+    toast("Référiste mis à jour.");
+  }}, "Enregistrer"));
+  actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
+    adminBuffer.sectionMembers = adminBuffer.sectionMembers.filter(function(x){ return x.id!==entry.id; });
+    scheduleAdminAutoPush();
+    closeSheet(); render("sysadmin-section");
+    toast("Référiste retiré.");
+  }}, "Retirer ce référiste"));
+  actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
+  form.appendChild(actions);
+
+  openSheet("Référiste", form);
+}
 
 /* Écran séparé « Liste de la section » (ex-bloc « Annuaire » de l'ancien
    écran unique ci-dessus, inchangé sur le fond). */
@@ -8723,7 +9356,8 @@ function buildInviteSmsBody(sectionCode, pin){
    propose la demande d'échange. */
 function openMyPlanningEntryDetail(e){
   var body = h("div", null);
-  var sub = planningTypeLabel(e.type)+" · Présidence "+(e.presidence==="Salarié"?"salariée":e.presidence==="Employeur"?"employeur":"—");
+  var typeTxt = e.source==="refere" ? "Référé" : planningTypeLabel(e.type);
+  var sub = typeTxt+" · Présidence "+(e.presidence==="Salarié"?"salariée":e.presidence==="Employeur"?"employeur":"—");
   body.appendChild(h("p", {class:"lede"}, sub));
 
   var panel = h("div", {class:"panel"});
@@ -8752,9 +9386,18 @@ function openMyPlanningEntryDetail(e){
      manuelle, jusqu'à une simple notification SMS au président
      (comportement d'origine, entièrement inchangé — voir
      openSwapRequestInstructions ci-dessous). */
-  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){
-    if(state.sync.sectionCode){ openExchangeRequest(e); } else { openSwapRequestInstructions(e); }
-  }}, "Demander un échange"));
+  /* Les échanges entre référistes (module ÉCHANGE AUTOMATISÉ ci-dessous,
+     étendu — étape 4, à venir) ne portent pour l'instant que sur les
+     audiences de section : pour une audience de référé, on l'indique
+     plutôt que de proposer un échange qui échouerait silencieusement
+     (findOwnPlanningEntryFor ne cherche que dans state.planning). */
+  if(e.source==="refere"){
+    body.appendChild(h("p", {class:"footnote", style:"margin-top:14px"}, "Les échanges entre référistes seront disponibles dans une prochaine mise à jour."));
+  } else {
+    body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){
+      if(state.sync.sectionCode){ openExchangeRequest(e); } else { openSwapRequestInstructions(e); }
+    }}, "Demander un échange"));
+  }
   body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
 
   openSheet(planningDateLabel(e.date), body);
@@ -9170,7 +9813,21 @@ renderers["mon-planning"] = function(root){
   var syncActive = !!state.sync.sectionCode;
   var derivedFromSync = syncActive ? syncMyPlanningFromSection() : false;
 
-  if(syncActive && !derivedFromSync){
+  /* Espace des référés (étape 2, voir module dédié) : dès qu'il a été
+     rejoint et qu'une fiche a été choisie, les audiences de référé
+     concernant cette personne se recalculent à chaque affichage (même
+     principe que derivedFromSync ci-dessus), et sont fusionnées ci-dessous
+     aux audiences de section — jamais dans un écran séparé (décision de
+     l'utilisateur). Chaque entrée est marquée source:"refere" pour rester
+     étiquetable « Référé » dans la liste et le détail (voir
+     openMyPlanningEntryDetail). */
+  var refereActive = !!(state.refereSync.sectionCode && !state.refereSync.revoked && state.refereSync.memberId);
+  if(refereActive) syncMyReferePlanning();
+  var refereEntries = refereActive ? (state.myReferePlanning.entries||[]).map(function(e){
+    return Object.assign({}, e, {source:"refere"});
+  }) : [];
+
+  if(syncActive && !derivedFromSync && refereEntries.length===0){
     root.appendChild(h("p", {class:"lede"}, "Votre planning personnel se calcule automatiquement depuis celui de la section, dès que votre nom et votre prénom sont renseignés."));
     root.appendChild(h("div", {class:"panel"},
       h("div", {class:"init-empty", style:"min-height:auto; padding:24px 4px;"},
@@ -9182,7 +9839,7 @@ renderers["mon-planning"] = function(root){
 
   var mine = state.myPlanning || DEFAULT_STATE.myPlanning;
 
-  if(!mine.importedAt){
+  if(!mine.importedAt && refereEntries.length===0){
     var fileIn = myPlanningImportInput();
     root.appendChild(fileIn);
     root.appendChild(h("p", {class:"lede"}, "Consultez ici votre planning personnel — uniquement les audiences où vous intervenez. Il est alimenté par la présidence de section, qui vous transmet un fichier depuis le bouton « Partager avec la section »."));
@@ -9194,14 +9851,19 @@ renderers["mon-planning"] = function(root){
     return;
   }
 
-  var importedDate = null;
-  try{ importedDate = new Date(mine.importedAt); }catch(e){}
-  var whenTxt = importedDate && !isNaN(importedDate) ? importedDate.toLocaleDateString("fr-FR") : "";
-  root.appendChild(h("p", {class:"lede"},
-    syncActive
-      ? "Planning de la section"+(mine.from ? " (président·e : "+mine.from+")" : "")+", actualisé automatiquement — lecture seule ; seule la présidence de section peut le modifier."
-      : "Planning reçu"+(mine.from ? " de "+mine.from : "")+(whenTxt ? " le "+whenTxt : "")+" — lecture seule ; seule la présidence de section peut le mettre à jour."
-  ));
+  if(mine.importedAt){
+    var importedDate = null;
+    try{ importedDate = new Date(mine.importedAt); }catch(e){}
+    var whenTxt = importedDate && !isNaN(importedDate) ? importedDate.toLocaleDateString("fr-FR") : "";
+    root.appendChild(h("p", {class:"lede"},
+      syncActive
+        ? "Planning de la section"+(mine.from ? " (président·e : "+mine.from+")" : "")+", actualisé automatiquement — lecture seule ; seule la présidence de section peut le modifier."
+        : "Planning reçu"+(mine.from ? " de "+mine.from : "")+(whenTxt ? " le "+whenTxt : "")+" — lecture seule ; seule la présidence de section peut le mettre à jour."
+    ));
+  }
+  if(refereEntries.length){
+    root.appendChild(h("p", {class:"lede"}, "Vos audiences de référé (étiquetées « Référé » ci-dessous) sont mélangées à celles de votre section — lecture seule ; seuls l'administrateur et le/la responsable des référés peuvent les modifier."));
+  }
 
   var mode = "month";
   var monthVal = monthKey(todayISO());
@@ -9236,7 +9898,7 @@ renderers["mon-planning"] = function(root){
   }
   function renderList(){
     clear(listBox);
-    var entries = mine.entries.filter(function(e){
+    var entries = (mine.entries||[]).concat(refereEntries).filter(function(e){
       return mode==="month" ? monthKey(e.date)===monthVal : e.date.slice(0,4)===String(yearVal);
     }).sort(function(a,b){ return a.date<b.date ? -1 : a.date>b.date ? 1 : 0; });
     var panel = h("div", {class:"panel"});
@@ -9245,7 +9907,8 @@ renderers["mon-planning"] = function(root){
     } else {
       entries.forEach(function(e){
         var roleTxt = e.role==="president" ? "Vous présidez" : "Vous êtes assesseur";
-        var sub = roleTxt+" · "+planningTypeLabel(e.type)+" · Collège "+(e.college||"—").toLowerCase();
+        var typeTxt = e.source==="refere" ? "Référé" : planningTypeLabel(e.type);
+        var sub = roleTxt+" · "+typeTxt+" · Collège "+(e.college||"—").toLowerCase();
         panel.appendChild(h("div", {class:"row-click", onclick:function(){ openMyPlanningEntryDetail(e); }},
           h("div", {class:"rc-main"},
             h("div", {class:"rc-title"}, planningDateLabel(e.date)),
@@ -10716,6 +11379,39 @@ renderers.settings = function(root){
   syncPanel.appendChild(h("p", {class:"footnote", style:"margin-top:10px; margin-bottom:0"}, "Vos données se synchronisent désormais automatiquement (à l’ouverture, à chaque écran et au moins une fois par heure) — vous n’avez normalement rien à faire ici."));
   root.appendChild(syncPanel);
 
+  /* « Espace des référés » (étape 2, voir module dédié plus haut) :
+     visible pour tout le monde, pas seulement pour la présidence de
+     section — le statut de référiste est CPH-wide et indépendant de la
+     section d'origine (voir échange avec l'utilisateur : seul
+     l'administrateur décide qui est référiste). Trois états possibles :
+     jamais rejoint (proposer le code), rejoint et actif (statut + actions
+     de secours), ou retiré entre-temps par l'administrateur (revoked). */
+  root.appendChild(h("div", {class:"section-title"}, "Espace des référés"));
+  var referePanel = h("div", {class:"panel"});
+  if(!state.refereSync.sectionCode){
+    referePanel.appendChild(h("p", {class:"lede", style:"margin:0 0 12px"}, "Si vous êtes référiste, rejoignez ici l'espace des référés avec le code transmis par l'administrateur ou le/la responsable des référés : vos audiences de référé apparaîtront alors automatiquement dans « Mon planning »."));
+    referePanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){ openJoinRefereSheet(); }}, "Rejoindre l'espace des référés"));
+  } else if(state.refereSync.revoked){
+    referePanel.appendChild(h("p", {class:"lede", style:"margin:0 0 12px"}, "Vous avez été retiré(e) de la liste des référistes par l'administrateur — vos audiences de référé n'apparaissent plus dans « Mon planning »."));
+    referePanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){
+      state.refereSync = clone(DEFAULT_STATE.refereSync);
+      state.refereMembers = []; state.referePlanning = [];
+      state.myReferePlanning = clone(DEFAULT_STATE.myReferePlanning);
+      saveState(); render("settings");
+    }}, "Fermer ce message"));
+  } else {
+    var refereMe = state.refereMembers.filter(function(m){ return m.id===state.refereSync.memberId; })[0];
+    referePanel.appendChild(h("p", {class:"lede", style:"margin:0 0 12px"}, refereMe
+      ? "Vous êtes référiste, fiche liée à « "+memberDisplayName(refereMe)+" » — vos audiences de référé apparaissent automatiquement dans « Mon planning », étiquetées « Référé »."
+      : "Espace des référés rejoint — choisissez votre fiche pour voir vos audiences de référé dans « Mon planning »."));
+    if(!refereMe){
+      referePanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:function(){ openPickMyRefereMemberSheet(); }}, "Choisir ma fiche"));
+    }
+    referePanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ confirmAndPullReferePlanning("settings"); }}, "Actualiser le planning des référés"));
+    referePanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:disableRefereSync}, "Quitter l'espace des référés"));
+  }
+  root.appendChild(referePanel);
+
   /* Réservée à LA personne désignée administrateur (voir isDesignatedAdmin
      et échange avec l'utilisateur, même correction que le badge de
      l'accueil) : n'importe quel autre profil ne voit plus cette section du
@@ -10737,7 +11433,14 @@ window.__cph = { h:h, icon:icon, clear:clear, toast:toast, openSheet:openSheet, 
   state:state, saveState:saveState, go:go, goBack:goBack, render:render, renderers:renderers,
   NATURES:NATURES, SECTIONS:SECTIONS, DURATIONS:DURATIONS, REF_TEXTS:REF_TEXTS, PHRASES:PHRASES,
   BJ_STEPS:BJ_STEPS, BCO_STEPS:BCO_STEPS, uid:uid, todayISO:todayISO, saveFile:saveFile, downloadsReady:downloadsReady,
-  applyTheme:applyTheme, maybeAutoPullSection:maybeAutoPullSection };
+  applyTheme:applyTheme, maybeAutoPullSection:maybeAutoPullSection,
+  /* Primitives de synchronisation exposées pour les tests automatisés
+     uniquement (simuler, par ex., une future étape de gestion du planning
+     des référés pas encore construite dans l'interface) — jamais appelées
+     depuis un écran de l'application via window.__cph, seulement en
+     interne. */
+  pullSectionSync:pullSectionSync, pushSectionSyncPayload:pushSectionSyncPayload,
+  maybeAutoPullReferePlanning:maybeAutoPullReferePlanning };
 
 render(navStack[navStack.length-1]);
 
@@ -10909,5 +11612,3 @@ render(navStack[navStack.length-1]);
 
   window.dispatchEvent(new Event("fb-sync-ready"));
 </script>
-
-</html>
