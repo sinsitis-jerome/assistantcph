@@ -209,6 +209,18 @@
   .info-list .info-value{ font-weight:600; text-align:right; color:var(--text); text-decoration:none; }
   a.info-value:hover{ text-decoration:underline; }
 
+  /* Petit bouton icône rond, ex. "Envoyer un SMS" sur une fiche de
+     candidat (voir openExchangeCandidatesSheet) — même langage visuel que
+     les cercles d'icône .ic ci-dessus (fond accent-glow), en version
+     compacte et cliquable au clavier/tactile. */
+  .icon-btn-round{
+    width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    background:var(--accent-glow); color:var(--accent-2); border:none; cursor:pointer; flex:none; padding:0;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .icon-btn-round:active{ transform:scale(0.92); }
+  .icon-btn-round svg{ width:15px; height:15px; }
+
   .card-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; position:relative; z-index:1; }
   .tool-card{
     background:var(--panel); border:1px solid var(--divider); border-radius:var(--radius-lg);
@@ -514,6 +526,7 @@
   <symbol id="ic-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16h16"/><rect x="7.5" y="12.5" width="3" height="5"/><rect x="12.5" y="9" width="3" height="8.5"/><rect x="17.5" y="6" width="3" height="11.5"/></symbol>
   <symbol id="ic-calendar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4M16 3v4"/></symbol>
   <symbol id="ic-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"/><path d="M7.5 8.5L12 4l4.5 4.5"/><path d="M4 15v3.5A2.5 2.5 0 006.5 21h11a2.5 2.5 0 002.5-2.5V15"/></symbol>
+  <symbol id="ic-sms" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="12.5" rx="2.5"/><path d="M8 20l3.3-3h1.4"/><path d="M7.5 9h9M7.5 12.5h6"/></symbol>
 </svg>
 
 <div id="app">
@@ -4226,7 +4239,8 @@ var SCREEN_TITLES = {
   "greffier-home":"Espace greffier", "greffier-section":"Section",
   "greffier-section-planning":"Planning", "greffier-section-annuaire":"Conseillers",
   "referes-planification":"Planning des référés",
-  "sysadmin-referes-planning":"Planning des référés"
+  "sysadmin-referes-planning":"Planning des référés",
+  "section-audience-ranking":"Classement de la section"
 };
 /* Écrans du parcours d'accueil : ni bouton retour ni icône Réglages tant
    qu'on y est (voir render() plus bas) — un conseiller ne doit pas
@@ -6679,6 +6693,66 @@ function sectionAverageAudiencesPerConseiller(){
   return total/eligible.length;
 }
 
+/* Classement complet des conseillers « ordinaires » de la section par
+   charge d'audiences de l'année en cours (BJ + BCO/BCO MEE) — même
+   périmètre et même critère que sectionAverageAudiencesPerConseiller
+   ci-dessus (président(e)/vice-président(e) de section exclus, pour les
+   mêmes raisons), mais détaillé conseiller par conseiller plutôt que
+   réduit à une seule moyenne. Ajouté sur demande de l'utilisateur, pour
+   repérer un déséquilibre de charge d'un coup d'œil plutôt que d'ouvrir
+   la fiche de chaque conseiller une par une. Trié du plus au moins
+   sollicité ; à égalité, ordre alphabétique (mêmes règles que
+   memberSortCompare, déjà utilisé pour le classement des candidats). */
+function sectionAudienceRanking(){
+  var year = currentYearStr();
+  var planningYear = (state.planning||[]).filter(function(p){ return p.date && p.date.slice(0,4)===year; });
+  return eligibleConseillersForSectionAverage().map(function(m){
+    return {
+      member: m,
+      bj: memberTotalForTypeIn(planningYear, m.id, "bj"),
+      bco: memberTotalForTypeIn(planningYear, m.id, "bco") + memberTotalForTypeIn(planningYear, m.id, "bco-mee"),
+      total: memberTotalAllTypesIn(planningYear, m.id)
+    };
+  }).sort(function(a,b){
+    if(a.total!==b.total) return b.total-a.total;
+    return memberSortCompare(a.member, b.member);
+  });
+}
+
+/* Pourcentage d'audiences (année en cours) par syndicat, parmi les
+   conseillers « ordinaires » du collège donné — ajouté sur demande de
+   l'utilisateur, réservé au président/vice-président de section et
+   toujours limité à SON PROPRE collège (jamais l'autre) : ni l'un ni
+   l'autre n'a de toute façon jamais pu voir/modifier que son propre
+   collège dans l'Outil de planification (voir « Vue combinée d'une
+   audience »), il est donc cohérent de restreindre cette répartition de
+   la même façon plutôt que de mélanger les deux collèges. Même périmètre
+   que sectionAudienceRanking (président(e)/vice-président(e) exclus),
+   regroupé par la valeur EXACTE du champ Syndicat de chaque fiche (texte
+   libre "AUTRE" compris, voir createSyndicatField) plutôt que par une
+   liste fermée, pour ne jamais perdre une organisation saisie en texte
+   libre. Renvoie null si le collège n'a aucun conseiller éligible. */
+function sectionAudiencesBySyndicatForCollege(college){
+  var year = currentYearStr();
+  var planningYear = (state.planning||[]).filter(function(p){ return p.date && p.date.slice(0,4)===year; });
+  var members = eligibleConseillersForSectionAverage().filter(function(m){ return (m.college||"")===college; });
+  if(!members.length) return null;
+  var byLabel = {}, grandTotal = 0;
+  members.forEach(function(m){
+    var total = memberTotalAllTypesIn(planningYear, m.id);
+    var label = (m.syndicat||"").trim() || "Non précisé";
+    byLabel[label] = (byLabel[label]||0) + total;
+    grandTotal += total;
+  });
+  var rows = Object.keys(byLabel).map(function(label){
+    return { label: label, total: byLabel[label], pct: grandTotal ? (byLabel[label]/grandTotal)*100 : 0 };
+  }).sort(function(a,b){
+    if(b.total!==a.total) return b.total-a.total;
+    return a.label.localeCompare(b.label, "fr");
+  });
+  return { college: college, grandTotal: grandTotal, rows: rows };
+}
+
 function computeMyActivityStats(){
   var year = currentYearStr();
   var today = todayISO();
@@ -6716,6 +6790,21 @@ function computeMyActivityStats(){
     if(sp.outWork!=null) outWorkTotal += sp.outWork;
   });
 
+  /* Référés (ajouté 2026-09, sur demande de l'utilisateur) : aucune nature
+     de vacation dédiée n'existe pour un référé (contrairement à BJ/BCO,
+     déclarés via une feuille de vacation), donc réalisé/à venir se basent
+     ici uniquement sur les dates du planning des référés — même principe
+     que « Présidences » ci-dessus, qui n'a lui non plus aucune nature de
+     vacation propre. N'affiche ce bloc que si l'espace des référés a
+     effectivement été rejoint (voir refereActive dans renderMyActivity) :
+     sans quoi, ce serait un « 0 » systématique et sans intérêt pour
+     l'immense majorité des conseillers, jamais référistes. */
+  var refereActive = !!(state.refereSync.sectionCode && !state.refereSync.revoked && state.refereSync.memberId);
+  if(refereActive) syncMyReferePlanning();
+  var refereYear = refereActive ? (state.myReferePlanning.entries||[]).filter(function(e){ return e.date && e.date.slice(0,4)===year; }) : [];
+  var refereDone = refereYear.filter(function(e){ return e.date<today; }).length;
+  var refereUpcoming = refereYear.filter(function(e){ return e.date>=today; }).length;
+
   return {
     year: year,
     bjDone: bjDone, bjUpcoming: bjUpcoming, bjTotal: bjDone+bjUpcoming,
@@ -6726,7 +6815,8 @@ function computeMyActivityStats(){
     presidencesDone: presidencesDone, presidencesUpcoming: presidencesUpcoming, presidencesTotal: presidencesDone+presidencesUpcoming,
     redactionsDone: redactionVac.length,
     avgRedactionMin: avgMinutes(redactionVac),
-    inWorkTotal: inWorkTotal, outWorkTotal: outWorkTotal, workTotal: inWorkTotal+outWorkTotal
+    inWorkTotal: inWorkTotal, outWorkTotal: outWorkTotal, workTotal: inWorkTotal+outWorkTotal,
+    refereActive: refereActive, refereDone: refereDone, refereUpcoming: refereUpcoming, refereTotal: refereDone+refereUpcoming
   };
 }
 
@@ -6755,6 +6845,13 @@ function renderMyActivity(root){
     ["À venir", String(s.bcoUpcoming)],
     ["Total", String(s.bcoTotal)]
   ]);
+  if(s.refereActive){
+    panel("Référés", [
+      ["Réalisés", String(s.refereDone)],
+      ["À venir", String(s.refereUpcoming)],
+      ["Total", String(s.refereTotal)]
+    ]);
+  }
   panel("Toutes audiences", [
     ["Réalisées", String(s.audiencesDone)],
     ["À venir", String(s.audiencesUpcoming)],
@@ -6762,6 +6859,14 @@ function renderMyActivity(root){
     ["Moyenne par conseiller de la section", s.avgPerConseiller!=null ? s.avgPerConseiller.toFixed(1).replace(".", ",")+" audience"+(s.avgPerConseiller>=2?"s":"") : "—"],
     ["Durée moyenne d’une audience", s.avgAudienceMin!=null ? minutesLabel(s.avgAudienceMin) : "—"]
   ]);
+  /* Classement complet des conseillers de la section (voir
+     sectionAudienceRanking) : réservé au président/vice-président de
+     section, sur le même principe que la carte « Administrer ma section »
+     de l'accueil — un simple conseiller ne voit ici que la moyenne
+     ci-dessus, jamais le détail conseiller par conseiller des autres. */
+  if(state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president"){
+    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ go("section-audience-ranking"); }}, "Voir le classement de la section"));
+  }
   panel("Présidences", [
     ["Réalisées", String(s.presidencesDone)],
     ["À venir", String(s.presidencesUpcoming)],
@@ -6851,6 +6956,75 @@ renderers.stats = function(root){
   root.appendChild(panel);
 
   root.appendChild(h("div", {class:"footnote"}, "Répartition de vos vacations personnelles sur la période sélectionnée."));
+};
+
+/* Écran dédié « Classement de la section » (voir sectionAudienceRanking) —
+   réservé au président/vice-président de section, accessible uniquement
+   depuis le bouton de renderMyActivity (jamais depuis l'accueil), sur le
+   modèle visuel déjà utilisé pour « Par type de vacation » (barre de
+   proportion + rang) afin de rester cohérent avec le reste de l'écran
+   Statistiques. */
+renderers["section-audience-ranking"] = function(root){
+  if(!(state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president")){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Cet écran est réservé au président ou à la vice-présidente de section.")));
+    return;
+  }
+  root.appendChild(h("p", {class:"lede"}, "Charge d’audiences ("+currentYearStr()+") des conseillers de la section, du plus au moins sollicité — président(e) et vice-président(e) de section exclus, comme pour la moyenne de la section."));
+
+  var medals = ["🥇","🥈","🥉"];
+  var rows = sectionAudienceRanking();
+  if(!rows.length){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Aucun conseiller « ordinaire » dans cette section pour l’instant.")));
+  } else {
+    var maxTotal = Math.max.apply(null, rows.map(function(r){ return r.total; }).concat([1]));
+    var panel = h("div", {class:"panel"});
+    rows.forEach(function(r, i){
+      var pct = Math.max(8, Math.round((r.total/maxTotal)*100));
+      panel.appendChild(h("div", {class:"stats-row"},
+        h("div", {class:"stats-row-bar", style:"width:"+pct+"%"}),
+        h("div", {class:"stats-row-content"},
+          h("div", {class:"stats-row-rank"}, medals[i] || ""),
+          h("div", {class:"stats-row-main"},
+            h("div", {class:"stats-row-title"}, memberDisplayName(r.member)+collegeSuffix(r.member.college)),
+            h("div", {class:"stats-row-sub"}, r.bj+" BJ · "+r.bco+" BCO")
+          ),
+          h("div", {class:"stats-row-val"}, r.total+(r.total>1 ? " audiences" : " audience"))
+        )
+      ));
+    });
+    root.appendChild(panel);
+    root.appendChild(h("div", {class:"footnote"}, "Même critère que « Moyenne par conseiller de la section » : audiences BJ et BCO/BCO MEE de l’année en cours, tous rôles confondus (présidence ou assesseur)."));
+  }
+
+  /* Répartition par syndicat (voir sectionAudiencesBySyndicatForCollege) :
+     toujours limitée au PROPRE collège de la personne qui consulte —
+     jamais l'autre, ni un choix de collège — sur demande explicite de
+     l'utilisateur. */
+  var myCollege = state.profile.college;
+  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px;"}, "Répartition par syndicat"+(myCollege ? " — collège "+myCollege : "")));
+  var syndData = myCollege ? sectionAudiencesBySyndicatForCollege(myCollege) : null;
+  if(!syndData || !syndData.grandTotal){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, myCollege ? "Aucune audience enregistrée cette année pour ce collège." : "Collège non renseigné dans votre profil.")));
+  } else {
+    var maxPct = Math.max.apply(null, syndData.rows.map(function(r){ return r.pct; }).concat([1]));
+    var synPanel = h("div", {class:"panel"});
+    syndData.rows.forEach(function(r, i){
+      var pct = Math.max(8, Math.round((r.pct/maxPct)*100));
+      synPanel.appendChild(h("div", {class:"stats-row"},
+        h("div", {class:"stats-row-bar", style:"width:"+pct+"%"}),
+        h("div", {class:"stats-row-content"},
+          h("div", {class:"stats-row-rank"}, medals[i] || ""),
+          h("div", {class:"stats-row-main"},
+            h("div", {class:"stats-row-title"}, r.label),
+            h("div", {class:"stats-row-sub"}, r.total+(r.total>1 ? " audiences" : " audience"))
+          ),
+          h("div", {class:"stats-row-val"}, r.pct.toFixed(1).replace(".", ",")+" %")
+        )
+      ));
+    });
+    root.appendChild(synPanel);
+    root.appendChild(h("div", {class:"footnote"}, "Pourcentage du total des audiences ("+syndData.grandTotal+") de votre collège cette année, réparties selon le syndicat/l’organisation déclaré(e) sur la fiche de chaque conseiller ordinaire."));
+  }
 };
 
 /* =================================================================
@@ -9482,6 +9656,28 @@ function buildInviteSmsBody(sectionCode, pin){
   ].join("\n");
 }
 
+/* Message SMS "Demander un échange" (bouton dédié sur chaque fiche de la
+   liste de candidats, voir openExchangeCandidatesSheet) — texte et
+   retours à la ligne imposés tels quels par l'utilisateur. Un simple
+   raccourci de premier contact hors application (même limite que
+   buildInviteSmsBody/openSmsCompose ci-dessus : ouverture pré-remplie de
+   l'app SMS, rien d'automatique) — ne modifie ni n'envoie rien dans
+   l'application elle-même ; le parcours d'échange (case à cocher « écrit »,
+   application réelle dans le planning) reste inchangé et se poursuit
+   séparément une fois la personne effectivement d'accord. */
+function buildExchangeRequestSmsBody(candidatePrenom, typeLabel, dateLabel){
+  return [
+    "Bonjour "+candidatePrenom+",",
+    "",
+    "Seriez-vous disponible pour siéger à ma place lors du "+typeLabel+" du "+dateLabel+" ?",
+    "",
+    "Si oui, pourriez-vous m'indiquer une audience de votre planning que je pourrais prendre à la place ?",
+    "",
+    "Un grand merci,",
+    state.profile.prenom || ""
+  ].join("\n");
+}
+
 /* Vue détail d'une audience de « Mon planning » : rappelle qui d'autre y
    est prévu (les deux collèges réunis, voir applyMyPlanningImport) et
    propose la demande d'échange. */
@@ -9618,13 +9814,22 @@ function openExchangeCandidatesSheet(myEntry, meMember, tier){
     : "Aucun conseiller de votre syndicat n’a accepté — conseillers de votre collège mais d’un autre syndicat, classés du moins au plus sollicité :"));
   body.appendChild(h("p", {class:"lede", style:"font-weight:600"}, "Contactez en priorité les conseillers ci-dessous dans l’ordre indiqué."));
 
+  var typeLabel = planningTypeLabel(myEntry.type);
+  var dateLabel = planningDateLabel(myEntry.date);
+
   ranked.forEach(function(c){
     var m = c.member;
     var digits = (m.tel||"").replace(/\D/g, "");
     body.appendChild(h("div", {class:"panel", style:"margin-bottom:10px; padding:12px 14px;"},
-      h("div", {style:"display:flex; justify-content:space-between; align-items:baseline; gap:8px;"},
+      h("div", {style:"display:flex; justify-content:space-between; align-items:center; gap:8px;"},
         h("div", {style:"font-weight:600"}, memberDisplayName(m)),
-        h("div", {class:"footnote"}, c.total+" audience"+(c.total>1?"s":"")+" au total")
+        h("div", {style:"display:flex; align-items:center; gap:10px;"},
+          h("div", {class:"footnote"}, c.total+" audience"+(c.total>1?"s":"")+" au total"),
+          m.tel ? h("button", {
+            class:"icon-btn-round", title:"Envoyer un SMS pour demander l’échange",
+            onclick:function(){ openSmsCompose(m.tel, buildExchangeRequestSmsBody(m.prenom||"", typeLabel, dateLabel)); }
+          }, icon("ic-sms")) : null
+        )
       ),
       h("div", {class:"info-list", style:"margin-top:6px"},
         h("div", {class:"info-row"},
