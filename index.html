@@ -4225,7 +4225,8 @@ var SCREEN_TITLES = {
   "onboarding-activite":"Bienvenue", "onboarding-signature":"Bienvenue",
   "greffier-home":"Espace greffier", "greffier-section":"Section",
   "greffier-section-planning":"Planning", "greffier-section-annuaire":"Conseillers",
-  "referes-planification":"Planning des référés"
+  "referes-planification":"Planning des référés",
+  "sysadmin-referes-planning":"Planning des référés"
 };
 /* Écrans du parcours d'accueil : ni bouton retour ni icône Réglages tant
    qu'on y est (voir render() plus bas) — un conseiller ne doit pas
@@ -5090,7 +5091,7 @@ function renderAdminReferesLanding(root){
   wrap.appendChild(h("div", {class:"hero"},
     h("div", {class:"eyebrow"}, adminBuffer.cph),
     h("h1", null, "Référés"),
-    h("p", null, "Référistes de toutes les sections — le planning des référés viendra dans une prochaine étape. « Enregistrer et synchroniser » reste disponible pour forcer l'envoi immédiatement.")
+    h("p", null, "Référistes de toutes les sections — l'administrateur peut aussi gérer directement le planning des référés ci-dessous, en plus du/de la responsable désigné(e). « Enregistrer et synchroniser » reste disponible pour forcer l'envoi immédiatement.")
   ));
   root.appendChild(wrap);
 
@@ -5106,6 +5107,29 @@ function renderAdminReferesLanding(root){
   ));
   codePanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ copyText(adminBuffer.sectionCode); }}, "Copier le code"));
   root.appendChild(codePanel);
+
+  /* Demande initiale de l'utilisateur : « que le chef des référés ... OU
+     l'administrateur puisse gérer ce planning de référé ». L'étape 3
+     n'avait donné cet accès qu'au/à la responsable désigné(e), depuis son
+     propre appareil de conseiller(e) (voir module PLANNING DES RÉFÉRÉS —
+     CÔTÉ RESPONSABLE) — ce raccourci comble l'écart pour l'administrateur,
+     qui doit pouvoir gérer le planning même si personne n'a encore été
+     désigné(e) responsable, ou en son absence. Même écran de résultat
+     (groupPlanningByAudience/mergedEntryCompleteness), sur adminBuffer
+     plutôt que sur state — voir renderers["sysadmin-referes-planning"]
+     et openAdminRefereAudienceForm plus bas. */
+  root.appendChild(h("div", {class:"section-title"}, "Planning"));
+  var planningCard = h("div", {class:"panel"});
+  planningCard.appendChild(h("div", {class:"row-click", tabindex:"0", onclick:function(){ go("sysadmin-referes-planning"); },
+      onkeydown:function(e){ if(e.key==="Enter") go("sysadmin-referes-planning"); }},
+    h("div", {class:"ic"}, icon("ic-scale")),
+    h("div", {class:"rc-main"},
+      h("div", {class:"rc-title"}, "Planning des référés"),
+      h("div", {class:"rc-sub"}, adminBuffer.planning.length ? (adminBuffer.planning.length+(adminBuffer.planning.length>1 ? " enregistrements" : " enregistrement")) : "Aucune audience enregistrée")
+    ),
+    icon("ic-chev", "chev")
+  ));
+  root.appendChild(planningCard);
 
   root.appendChild(h("div", {class:"section-title"}, "Référistes"));
   var list = h("div", {class:"panel"});
@@ -6492,13 +6516,17 @@ renderers.home = function(root){
     quickLinkAction("ic-users", "Annuaire", function(){ go("annuaire-cph"); }),
     sectionLink("cphWebUrl") ? quickLink("ic-globe", "Site web", sectionLink("cphWebUrl")) : null,
     quickLinkAction("ic-calendar", "Mon planning", function(){ go("mon-planning"); }),
-    /* Grisée temporairement à la demande de l'utilisateur : la moyenne
-       d'audiences par conseiller affichée sur cet écran ne reflète pas
-       encore les audiences à venir (seulement passées) -- le calcul est
-       à revoir avant de rouvrir l'accès à tout le monde. Voir la
-       discussion : « Ce n'est pas bon, je pense que tu n'as pas pris en
-       compte les audiences à venir. » */
-    quickLinkAction("ic-chart", "Statistiques", function(){ go("stats"); }, true)
+    /* Réactivé (chantier statistiques, 2026-09) : la moyenne d'audiences par
+       conseiller (sectionAverageAudiencesPerConseiller) avait été signalée
+       incorrecte par l'utilisateur (« tu n'as pas pris en compte les
+       audiences à venir ») et l'écran grisé pour tout le monde en attendant.
+       Vérifié : planningYear (dans sectionAverageAudiencesPerConseiller)
+       n'est filtré que par année, pas par date passée/future, donc les
+       audiences à venir de l'année en cours sont bien comptées dans le
+       total comme dans la moyenne — confirmé par un scénario de test
+       (conseiller avec un BJ passé + un BCO à venir -> moyenne 1,0 sur 2
+       conseillers, jamais 0,5). */
+    quickLinkAction("ic-chart", "Statistiques", function(){ go("stats"); })
   );
   wrap.appendChild(quickLinks);
 
@@ -10562,58 +10590,17 @@ function candidateRefereOptionLabel(c){
   return memberDisplayName(c.member) + " — " + c.total + " audience"+(c.total>1?"s":"")+" de référé au total";
 }
 
-/* Écran de liste, sur le modèle de renderers["sysadmin-section-planning"]
-   (une seule ligne par audience, les deux collèges déjà réunis — jamais
-   restreint à un collège ici non plus, puisqu'il n'y a qu'un(e) seul(e)
-   responsable). Pas d'import JSON (fonctionnalité propre à l'échange
-   entre présidence de section, sans objet ici). */
-renderers["referes-planification"] = function(root){
-  if(!isRefereResponsable()){
-    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Cet écran est réservé au/à la responsable des référés désigné(e) par l'administrateur.")));
-    return;
-  }
-  var refereMe = state.refereMembers.filter(function(m){ return m.id===state.refereSync.memberId; })[0];
-  root.appendChild(h("p", {class:"lede"}, "Responsable des référés"+(refereMe ? " — "+memberDisplayName(refereMe) : "")+" ("+state.referePlanning.length+(state.referePlanning.length>1 ? " enregistrements" : " enregistrement")+")."));
-
-  var planPanel = h("div", {class:"panel"});
-  var groups = groupPlanningByAudience(state.referePlanning);
-  if(!groups.length){
-    planPanel.appendChild(h("div", {class:"footnote"}, "Aucune audience de référé enregistrée."));
-  } else {
-    groups.forEach(function(g){
-      var people = audienceRosterLines(g, state.refereMembers).map(function(l){ return l.name; }).join(", ");
-      var incomplete = mergedEntryCompleteness(mergedRecordFromGroup(g)).incomplete;
-      planPanel.appendChild(h("div", {class:"row-click"+(incomplete ? " incomplete" : ""), tabindex:"0", onclick:function(){ openRefereAudienceForm(g); },
-          onkeydown:function(e){ if(e.key==="Enter") openRefereAudienceForm(g); }},
-        h("div", {class:"rc-main"},
-          h("div", {class:"rc-title"},
-            incomplete ? h("span", {class:"warn-blink", title:"Conseiller manquant"}, "⚠ ") : null,
-            planningDateLabel(g.date)
-          ),
-          h("div", {class:"rc-sub"}, (incomplete ? "Conseiller manquant · " : "") + (people || "—"))
-        )
-      ));
-    });
-  }
-  root.appendChild(planPanel);
-  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
-    openRefereAudienceForm({ date:"", type:"refere", presidence: COLLEGES[0]||"", byCollege:{} });
-  }}, "+ Ajouter une audience"));
-
-  var syncPanel = h("div", {class:"panel", style:"margin-top:16px"});
-  syncPanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:pushRefereNow}, "Envoyer mes modifications maintenant"));
-  syncPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ confirmAndPullReferePlanning("referes-planification"); }}, "Actualiser depuis les référés"));
-  syncPanel.appendChild(h("p", {class:"footnote", style:"margin-top:10px; margin-bottom:0"}, "Vos modifications sont envoyées automatiquement quelques secondes après chaque changement — les boutons ci-dessus restent disponibles en secours."));
-  root.appendChild(syncPanel);
-};
-
-/* Formulaire combiné (les deux collèges affichés côte à côte), sur le
-   modèle d'openAdminAudienceForm — mais toujours de type "refere" (pas de
-   sélecteur : il n'y a qu'un seul type d'audience dans cet espace) et
-   opérant sur state.refereMembers/state.referePlanning plutôt que sur
-   adminBuffer. group vient de groupPlanningByAudience, ou est un groupe
-   vide pour une toute nouvelle audience (« + Ajouter une audience »). */
-function openRefereAudienceForm(group){
+/* Demande initiale de l'utilisateur : « que le chef des référés ... OU
+   l'administrateur puisse gérer ce planning ». L'écran administrateur
+   (renderers["sysadmin-referes-planning"] et openAdminRefereAudienceForm,
+   plus bas, sur adminBuffer) donne le même accès que celui-ci, déjà en
+   place pour le/la responsable des référés depuis son propre appareil de
+   conseiller(e). Factorisé ici pour que les deux se comportent à
+   l'identique (mêmes règles de binôme, mêmes candidats classés) sans
+   dupliquer le formulaire : chaque appelant fournit juste sa source de
+   données (refereMembers/referePlanning locaux, ou adminBuffer) et ce
+   qu'il faut faire une fois enregistré/supprimé. */
+function buildRefereAudienceForm(group, ctx){
   var isEdit = !!(group.byCollege["Salarié"] || group.byCollege["Employeur"]);
   var ids = {};
   COLLEGES.forEach(function(c){ ids[c] = group.byCollege[c] ? group.byCollege[c].id : uid(); });
@@ -10644,7 +10631,7 @@ function openRefereAudienceForm(group){
     var box = collegeBoxes[col];
     clear(box);
     var presides = col === presidenceSel.value;
-    var candidates = rankedRefereCandidates(col);
+    var candidates = rankedCandidatesIn(ctx.members(), ctx.planning(), col, "refere");
     var presidentSel = null, assesseurSel = null;
 
     function roleSelect(){
@@ -10697,6 +10684,7 @@ function openRefereAudienceForm(group){
     var dupes = picked.filter(function(v, i){ return picked.indexOf(v)!==i; });
     if(dupes.length){ toast("Une même personne ne peut pas occuper deux rôles pour cette audience."); return; }
 
+    var planning = ctx.planning();
     COLLEGES.forEach(function(col){
       var s = selsByCollege[col];
       var president = s.president && s.president.value ? s.president.value : null;
@@ -10714,23 +10702,23 @@ function openRefereAudienceForm(group){
         assesseurs: assesseurs
       };
       if(existing){
-        state.referePlanning = state.referePlanning.map(function(p){ return p.id===entry.id ? entry : p; });
+        planning = planning.map(function(p){ return p.id===entry.id ? entry : p; });
       } else {
-        state.referePlanning.push(entry);
+        planning.push(entry);
       }
     });
+    ctx.setPlanning(planning);
 
-    saveState(); closeSheet();
-    render("referes-planification");
-    scheduleRefereAutoPush();
-    toast(isEdit ? "Audience modifiée." : "Audience ajoutée.");
+    closeSheet();
+    ctx.onSaved(isEdit);
   }}, isEdit ? "Enregistrer les modifications" : "Ajouter l'audience"));
 
   if(isEdit){
     actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
       var idsToRemove = COLLEGES.map(function(c){ return ids[c]; });
-      state.referePlanning = state.referePlanning.filter(function(p){ return idsToRemove.indexOf(p.id)===-1; });
-      saveState(); closeSheet(); render("referes-planification"); scheduleRefereAutoPush(); toast("Audience supprimée.");
+      ctx.setPlanning(ctx.planning().filter(function(p){ return idsToRemove.indexOf(p.id)===-1; }));
+      closeSheet();
+      ctx.onDeleted();
     }}, "Supprimer cette audience"));
   }
   actions.appendChild(h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Annuler"));
@@ -10738,6 +10726,160 @@ function openRefereAudienceForm(group){
 
   openSheet(isEdit ? "Modifier l’audience de référé" : "Nouvelle audience de référé", form);
 }
+
+/* Écran de liste, sur le modèle de renderers["sysadmin-section-planning"]
+   (une seule ligne par audience, les deux collèges déjà réunis — jamais
+   restreint à un collège ici non plus, puisqu'il n'y a qu'un(e) seul(e)
+   responsable). Pas d'import JSON (fonctionnalité propre à l'échange
+   entre présidence de section, sans objet ici). */
+renderers["referes-planification"] = function(root){
+  if(!isRefereResponsable()){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Cet écran est réservé au/à la responsable des référés désigné(e) par l'administrateur.")));
+    return;
+  }
+  var refereMe = state.refereMembers.filter(function(m){ return m.id===state.refereSync.memberId; })[0];
+  root.appendChild(h("p", {class:"lede"}, "Responsable des référés"+(refereMe ? " — "+memberDisplayName(refereMe) : "")+" ("+state.referePlanning.length+(state.referePlanning.length>1 ? " enregistrements" : " enregistrement")+")."));
+
+  var planPanel = h("div", {class:"panel"});
+  var groups = groupPlanningByAudience(state.referePlanning);
+  if(!groups.length){
+    planPanel.appendChild(h("div", {class:"footnote"}, "Aucune audience de référé enregistrée."));
+  } else {
+    groups.forEach(function(g){
+      var people = audienceRosterLines(g, state.refereMembers).map(function(l){ return l.name; }).join(", ");
+      var incomplete = mergedEntryCompleteness(mergedRecordFromGroup(g)).incomplete;
+      planPanel.appendChild(h("div", {class:"row-click"+(incomplete ? " incomplete" : ""), tabindex:"0", onclick:function(){ openRefereAudienceForm(g); },
+          onkeydown:function(e){ if(e.key==="Enter") openRefereAudienceForm(g); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"},
+            incomplete ? h("span", {class:"warn-blink", title:"Conseiller manquant"}, "⚠ ") : null,
+            planningDateLabel(g.date)
+          ),
+          h("div", {class:"rc-sub"}, (incomplete ? "Conseiller manquant · " : "") + (people || "—"))
+        )
+      ));
+    });
+  }
+  root.appendChild(planPanel);
+  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
+    openRefereAudienceForm({ date:"", type:"refere", presidence: COLLEGES[0]||"", byCollege:{} });
+  }}, "+ Ajouter une audience"));
+
+  var syncPanel = h("div", {class:"panel", style:"margin-top:16px"});
+  syncPanel.appendChild(h("button", {class:"sheet-btn ghost", onclick:pushRefereNow}, "Envoyer mes modifications maintenant"));
+  syncPanel.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ confirmAndPullReferePlanning("referes-planification"); }}, "Actualiser depuis les référés"));
+  syncPanel.appendChild(h("p", {class:"footnote", style:"margin-top:10px; margin-bottom:0"}, "Vos modifications sont envoyées automatiquement quelques secondes après chaque changement — les boutons ci-dessus restent disponibles en secours."));
+  root.appendChild(syncPanel);
+};
+
+/* Formulaire combiné (les deux collèges affichés côte à côte), sur le
+   modèle d'openAdminAudienceForm — mais toujours de type "refere" (pas de
+   sélecteur : il n'y a qu'un seul type d'audience dans cet espace).
+   Mince enveloppe autour de buildRefereAudienceForm (voir plus haut) :
+   opère sur state.refereMembers/state.referePlanning (copie locale du/de
+   la responsable), ré-affiche "referes-planification" et programme
+   l'envoi automatique côté responsable. group vient de
+   groupPlanningByAudience, ou est un groupe vide pour une toute nouvelle
+   audience (« + Ajouter une audience »). */
+function openRefereAudienceForm(group){
+  buildRefereAudienceForm(group, {
+    members: function(){ return state.refereMembers; },
+    planning: function(){ return state.referePlanning; },
+    setPlanning: function(p){ state.referePlanning = p; },
+    onSaved: function(isEdit){
+      saveState();
+      render("referes-planification");
+      scheduleRefereAutoPush();
+      toast(isEdit ? "Audience modifiée." : "Audience ajoutée.");
+    },
+    onDeleted: function(){
+      saveState();
+      render("referes-planification");
+      scheduleRefereAutoPush();
+      toast("Audience supprimée.");
+    }
+  });
+}
+
+/* Même formulaire, côté administrateur cette fois (demande initiale de
+   l'utilisateur : « ... ou l'administrateur puisse gérer ce planning »),
+   opérant sur adminBuffer.sectionMembers/adminBuffer.planning plutôt que
+   sur la copie locale d'un(e) responsable — utile aussi bien pour
+   administrer le planning en l'absence de responsable désigné(e) que pour
+   corriger/compléter son travail. Ré-affiche "sysadmin-referes-planning"
+   et programme l'envoi automatique côté administrateur (scheduleAdminAutoPush,
+   même mécanisme que pour une section normale). */
+function openAdminRefereAudienceForm(group){
+  buildRefereAudienceForm(group, {
+    members: function(){ return adminBuffer.sectionMembers; },
+    planning: function(){ return adminBuffer.planning; },
+    setPlanning: function(p){ adminBuffer.planning = p; },
+    onSaved: function(isEdit){
+      render("sysadmin-referes-planning");
+      scheduleAdminAutoPush();
+      toast(isEdit ? "Audience modifiée." : "Audience ajoutée.");
+    },
+    onDeleted: function(){
+      render("sysadmin-referes-planning");
+      scheduleAdminAutoPush();
+      toast("Audience supprimée.");
+    }
+  });
+}
+
+/* Écran de planning des référés côté administrateur — même présentation
+   que renderers["referes-planification"] (côté responsable) ci-dessus,
+   mais sur adminBuffer et accessible sans condition à quiconque a ouvert
+   l'espace des référés depuis l'espace administrateur (requireAdminBuffer),
+   qu'un(e) responsable ait été désigné(e) ou non. */
+renderers["sysadmin-referes-planning"] = function(root){
+  if(!requireAdminBuffer(root)) return;
+  if(!adminBuffer.loaded){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des données des référés…")));
+    return;
+  }
+  root.appendChild(h("p", {class:"lede"}, "Planning des référés — "+adminBuffer.cph+" ("+adminBuffer.planning.length+(adminBuffer.planning.length>1 ? " enregistrements" : " enregistrement")+")."));
+
+  var planPanel = h("div", {class:"panel"});
+  var groups = groupPlanningByAudience(adminBuffer.planning);
+  if(!groups.length){
+    planPanel.appendChild(h("div", {class:"footnote"}, "Aucune audience de référé enregistrée."));
+  } else {
+    groups.forEach(function(g){
+      var people = audienceRosterLines(g, adminBuffer.sectionMembers).map(function(l){ return l.name; }).join(", ");
+      var incomplete = mergedEntryCompleteness(mergedRecordFromGroup(g)).incomplete;
+      planPanel.appendChild(h("div", {class:"row-click"+(incomplete ? " incomplete" : ""), tabindex:"0", onclick:function(){ openAdminRefereAudienceForm(g); },
+          onkeydown:function(e){ if(e.key==="Enter") openAdminRefereAudienceForm(g); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"},
+            incomplete ? h("span", {class:"warn-blink", title:"Conseiller manquant"}, "⚠ ") : null,
+            planningDateLabel(g.date)
+          ),
+          h("div", {class:"rc-sub"}, (incomplete ? "Conseiller manquant · " : "") + (people || "—"))
+        )
+      ));
+    });
+  }
+  root.appendChild(planPanel);
+  root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
+    openAdminRefereAudienceForm({ date:"", type:"refere", presidence: COLLEGES[0]||"", byCollege:{} });
+  }}, "+ Ajouter une audience"));
+
+  var actions = h("div", {style:"margin-top:16px"});
+  var saveBtn;
+  actions.appendChild(saveBtn = h("button", {class:"sheet-btn accent", onclick:function(){
+    saveBtn.disabled = true;
+    clearAdminAutoPush();
+    pushAdminBuffer().then(function(){
+      saveBtn.disabled = false;
+      toast("Modifications envoyées.");
+    }).catch(function(){
+      saveBtn.disabled = false;
+      toast("Envoi impossible pour le moment (connexion ?).");
+    });
+  }}, "Enregistrer et synchroniser"));
+  root.appendChild(actions);
+};
 
 /* Fusionne, pour un même jour et un même type d'audience, l'enregistrement
    de chaque collège (chaque co-président ne saisit que les conseillers de
