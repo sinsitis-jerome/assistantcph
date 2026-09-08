@@ -6783,18 +6783,14 @@ function computeMyActivityStats(){
 
   var redactionVac = vacYear.filter(function(v){ return REDACTION_NATURE_IDS.indexOf(v.nature)!==-1; });
 
-  /* Temps de travail déclaré (en/hors temps de travail) : vacationSplit
-     ne peut calculer ce partage QUE si la vacation porte des horaires de
-     journée de travail (workStart/workEnd) — champs qui ne sont proposés
-     à la saisie que lorsque state.profile.remunere===true (voir
-     openVacationForm). Un profil non déclaré "salarié(e) rémunéré(e)"
-     enregistre donc systématiquement des vacations sans ces horaires, ce
-     qui donnait ici un panneau à "0 min" silencieux et trompeur (signalé
-     par l'utilisateur comme un bug alors que ses vacations étaient bien
-     enregistrées) plutôt qu'une explication claire — voir remunereKnown
-     et incompleteWorkSplit ci-dessous, utilisés par renderMyActivity pour
-     remplacer ce panneau par un message explicite dans ce cas, plutôt que
-     de continuer à afficher des zéros qui ressemblent à un bug. */
+  /* Temps de travail déclaré (en/hors temps de travail) : calculé par
+     vacationSplit, qui applique trois règles selon le profil (voir sa
+     documentation) — remunere===true (horaires de la vacation),
+     collège Salarié non rémunéré (tout hors temps de travail), collège
+     Employeur non rémunéré (par défaut 9h-18h). incompleteWorkSplit ne
+     compte donc plus que les cas résiduels réellement non calculables
+     (collège non renseigné, ou vacation "rémunéré" sans horaires de
+     travail saisis) — voir son usage dans renderMyActivity. */
   var inWorkTotal = 0, outWorkTotal = 0, incompleteWorkSplit = 0;
   vacYear.forEach(function(v){
     var sp = vacationSplit(v);
@@ -6828,7 +6824,7 @@ function computeMyActivityStats(){
     redactionsDone: redactionVac.length,
     avgRedactionMin: avgMinutes(redactionVac),
     inWorkTotal: inWorkTotal, outWorkTotal: outWorkTotal, workTotal: inWorkTotal+outWorkTotal,
-    incompleteWorkSplit: incompleteWorkSplit, vacYearCount: vacYear.length, remunere: state.profile.remunere===true,
+    incompleteWorkSplit: incompleteWorkSplit, vacYearCount: vacYear.length,
     refereActive: refereActive, refereDone: refereDone, refereUpcoming: refereUpcoming, refereTotal: refereDone+refereUpcoming
   };
 }
@@ -6893,26 +6889,22 @@ function renderMyActivity(root){
      partout dès que le partage en/hors temps de travail était impossible
      à calculer (voir incompleteWorkSplit dans computeMyActivityStats),
      notamment pour tout profil dont l'activité salariée n'est pas
-     déclarée "Oui" — les horaires de journée de travail ne sont alors
-     jamais demandés à la saisie d'une vacation, donc jamais disponibles
-     ici. Signalé par l'utilisateur comme un bug (des vacations bien
-     enregistrées, mais rien dans ce panneau) : remplacé par un message
-     explicite dans ce cas, plutôt que des zéros qui ressemblent à un
-     calcul cassé. */
+     déclarée "Oui". Une première correction affichait un message "Non
+     applicable" dans ce cas — mais l'utilisateur a précisé (2026-09) que
+     le calcul reste en fait toujours possible pour un profil non
+     rémunéré, via deux règles par défaut selon le collège (voir
+     vacationSplit) : le panneau numérique est donc désormais TOUJOURS
+     affiché, avec la note "incomplet" ci-dessous conservée comme filet de
+     sécurité pour les cas résiduels réellement non calculables (collège
+     non renseigné, ou anciennes vacations "rémunéré" sans horaires). */
   root.appendChild(h("div", {class:"section-title", style:"font-size:.92rem; margin:18px 0 8px;"}, "Temps de travail déclaré"));
-  if(!s.remunere){
-    root.appendChild(h("div", {class:"panel"},
-      h("div", {class:"footnote", style:"padding:2px 2px 4px;"}, "Non applicable : votre profil n’indique pas d’activité salariée rémunérée (Réglages > Votre profil > Activité salariée). Sans cette information, l’application ne demande jamais vos horaires de journée de travail, donc ne peut pas calculer ce partage — même si vos vacations sont par ailleurs bien enregistrées.")
-    ));
-  } else {
-    var workInfo = h("div", {class:"info-list panel"});
-    [["En temps de travail", minutesLabel(s.inWorkTotal)], ["Hors temps de travail", minutesLabel(s.outWorkTotal)], ["Total", minutesLabel(s.workTotal)]].forEach(function(r){
-      workInfo.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, r[0]), h("div", {class:"info-value"}, r[1])));
-    });
-    root.appendChild(workInfo);
-    if(s.incompleteWorkSplit>0){
-      root.appendChild(h("div", {class:"footnote", style:"margin-top:6px"}, s.incompleteWorkSplit+" vacation"+(s.incompleteWorkSplit>1?"s":"")+" sur "+s.vacYearCount+" sans horaires de journée de travail renseignés — non comptabilisée"+(s.incompleteWorkSplit>1?"s":"")+" ci-dessus."));
-    }
+  var workInfo = h("div", {class:"info-list panel"});
+  [["En temps de travail", minutesLabel(s.inWorkTotal)], ["Hors temps de travail", minutesLabel(s.outWorkTotal)], ["Total", minutesLabel(s.workTotal)]].forEach(function(r){
+    workInfo.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, r[0]), h("div", {class:"info-value"}, r[1])));
+  });
+  root.appendChild(workInfo);
+  if(s.incompleteWorkSplit>0){
+    root.appendChild(h("div", {class:"footnote", style:"margin-top:6px"}, s.incompleteWorkSplit+" vacation"+(s.incompleteWorkSplit>1?"s":"")+" sur "+s.vacYearCount+" sans horaires de journée de travail renseignés — non comptabilisée"+(s.incompleteWorkSplit>1?"s":"")+" ci-dessus."));
   }
 }
 
@@ -7249,12 +7241,24 @@ function maybeNotifyRitaReminder(){
   }catch(e){}
 }
 
-/* Repartition d'une vacation entre temps de travail (recouvrement avec
-   l'horaire de travail salarié saisi sur l'entrée) et hors temps de
+/* Repartition d'une vacation entre temps de travail et hors temps de
    travail — même règle que l'aperçu en direct du formulaire de saisie
-   (voir updateComputed ci-dessous). Retourne null/null quand l'info n'est
-   pas disponible pour cette vacation (pas d'activité salariée renseignée
-   à l'époque de la saisie). */
+   (voir updateComputed ci-dessous). Trois cas, précisés par l'utilisateur
+   (2026-09), selon l'activité salariée déclarée dans le profil :
+     1. remunere===true : recouvrement avec l'horaire de travail salarié
+        saisi SUR CETTE vacation (workStart/workEnd), ou tout "hors temps
+        de travail" si "Je ne devais pas travailler aujourd'hui" a été
+        coché (noWorkDay).
+     2. remunere!==true ET collège Salarié : tout ce qui est déclaré est
+        FORCÉMENT hors temps de travail (une personne non rémunérée comme
+        salariée n'est par définition jamais "en temps de travail").
+     3. remunere!==true ET collège Employeur : horaires de travail PAR
+        DÉFAUT 9h–18h (un(e) employeur n'a pas de "salaire" à proprement
+        parler, mais une journée de travail standard sert de référence).
+   Retourne null/null uniquement quand l'info reste réellement indisponible
+   (heures d'activité manquantes, ou collège non renseigné alors que
+   remunere n'est pas true — cas résiduel, en principe jamais atteint côté
+   normal puisque le collège est obligatoire dès l'annuaire). */
 function hmToMin(s){
   if(!s || typeof s!=="string") return null;
   var m = s.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
@@ -7264,11 +7268,23 @@ function vacationSplit(v){
   var s = hmToMin(v.actStart), e = hmToMin(v.actEnd);
   if(s===null || e===null || e<=s) return { inWork:null, outWork:null };
   var total = e-s;
-  if(v.noWorkDay) return { inWork:0, outWork:total };
-  var ws = hmToMin(v.workStart), we = hmToMin(v.workEnd);
-  if(ws===null || we===null || we<=ws) return { inWork:null, outWork:null };
-  var overlap = Math.max(0, Math.min(e,we)-Math.max(s,ws));
-  return { inWork:overlap, outWork: total-overlap };
+
+  if(state.profile.remunere===true){
+    if(v.noWorkDay) return { inWork:0, outWork:total };
+    var ws = hmToMin(v.workStart), we = hmToMin(v.workEnd);
+    if(ws===null || we===null || we<=ws) return { inWork:null, outWork:null };
+    var overlap = Math.max(0, Math.min(e,we)-Math.max(s,ws));
+    return { inWork:overlap, outWork: total-overlap };
+  }
+  if(state.profile.college==="Salarié"){
+    return { inWork:0, outWork:total };
+  }
+  if(state.profile.college==="Employeur"){
+    var ws2 = 9*60, we2 = 18*60;
+    var overlap2 = Math.max(0, Math.min(e,we2)-Math.max(s,ws2));
+    return { inWork:overlap2, outWork: total-overlap2 };
+  }
+  return { inWork:null, outWork:null };
 }
 /* Lignes d'info profil affichées en en-tête du relevé (collège, statut
    salarié/posté, horaires habituels) — la section, elle, reste dans le
@@ -7410,6 +7426,9 @@ function openVacationForm(existing){
     var total = e-s;
     totalN.textContent = minutesLabel(total);
     updateNatureAlert();
+    /* Même règle en trois cas que vacationSplit (voir sa documentation) —
+       dupliquée ici en aperçu "en direct" pendant la saisie, avant que la
+       vacation ne soit enregistrée. */
     if(state.profile.remunere===true && workStartF && workEndF){
       if(noWorkDayIn && noWorkDayIn.checked){
         inWorkN.textContent = minutesLabel(0);
@@ -7421,6 +7440,14 @@ function openVacationForm(existing){
       var overlap = Math.max(0, Math.min(e,we)-Math.max(s,ws));
       inWorkN.textContent = minutesLabel(overlap);
       outWorkN.textContent = minutesLabel(total-overlap);
+    } else if(state.profile.college==="Salarié"){
+      inWorkN.textContent = minutesLabel(0);
+      outWorkN.textContent = minutesLabel(total);
+    } else if(state.profile.college==="Employeur"){
+      var ws2 = 9*60, we2 = 18*60;
+      var overlap2 = Math.max(0, Math.min(e,we2)-Math.max(s,ws2));
+      inWorkN.textContent = minutesLabel(overlap2);
+      outWorkN.textContent = minutesLabel(total-overlap2);
     }
   }
 
@@ -7451,7 +7478,7 @@ function openVacationForm(existing){
   form.appendChild(h("div", {class:"stat-row", style:"margin-top:16px"},
     h("div", {class:"stat-box"}, totalN, h("div", {class:"l"}, "Durée totale de la vacation"))
   ));
-  if(state.profile.remunere===true){
+  if(state.profile.remunere===true || state.profile.college==="Salarié" || state.profile.college==="Employeur"){
     form.appendChild(h("div", {class:"stat-row", style:"margin-top:10px"},
       h("div", {class:"stat-box"}, inWorkN, h("div", {class:"l"}, "Durant le temps de travail")),
       h("div", {class:"stat-box"}, outWorkN, h("div", {class:"l"}, "Hors temps de travail"))
