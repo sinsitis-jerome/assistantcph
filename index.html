@@ -4240,7 +4240,8 @@ var SCREEN_TITLES = {
   "greffier-section-planning":"Planning", "greffier-section-annuaire":"Conseillers",
   "referes-planification":"Planning des référés",
   "sysadmin-referes-planning":"Planning des référés",
-  "section-audience-ranking":"Classement de la section"
+  "section-audience-ranking":"Classement de la section",
+  "cph-syndicat-stats":"Répartition par syndicat"
 };
 /* Écrans du parcours d'accueil : ni bouton retour ni icône Réglages tant
    qu'on y est (voir render() plus bas) — un conseiller ne doit pas
@@ -6732,13 +6733,21 @@ function sectionAudienceRanking(){
    libre "AUTRE" compris, voir createSyndicatField) plutôt que par une
    liste fermée, pour ne jamais perdre une organisation saisie en texte
    libre. Renvoie null si le collège n'a aucun conseiller éligible. */
-function sectionAudiencesBySyndicatForCollege(college){
+/* Version générique (members/planningList explicites) sous-jacente à
+   sectionAudiencesBySyndicatForCollege (une section, président/vice-président
+   exclus — même filtre que la moyenne de la section, la charge d'un
+   président n'étant pas comparable à celle d'un conseiller ordinaire) ET à
+   cphAudiencesBySyndicatForCollege (toutes les sections du CPH combinées,
+   personne exclu cette fois : il s'agit ici de la part réelle de l'activité
+   totale de chaque syndicat, pas d'une charge à comparer entre conseillers
+   — voir demande de l'utilisateur, 2026-09, pour la vue CPH). */
+function audiencesBySyndicatIn(members, planningList, college){
   var year = currentYearStr();
-  var planningYear = (state.planning||[]).filter(function(p){ return p.date && p.date.slice(0,4)===year; });
-  var members = eligibleConseillersForSectionAverage().filter(function(m){ return (m.college||"")===college; });
-  if(!members.length) return null;
+  var planningYear = (planningList||[]).filter(function(p){ return p.date && p.date.slice(0,4)===year; });
+  var scoped = (members||[]).filter(function(m){ return (m.college||"")===college; });
+  if(!scoped.length) return null;
   var byLabel = {}, grandTotal = 0;
-  members.forEach(function(m){
+  scoped.forEach(function(m){
     var total = memberTotalAllTypesIn(planningYear, m.id);
     var label = (m.syndicat||"").trim() || "Non précisé";
     byLabel[label] = (byLabel[label]||0) + total;
@@ -6751,6 +6760,52 @@ function sectionAudiencesBySyndicatForCollege(college){
     return a.label.localeCompare(b.label, "fr");
   });
   return { college: college, grandTotal: grandTotal, rows: rows };
+}
+function sectionAudiencesBySyndicatForCollege(college){
+  return audiencesBySyndicatIn(eligibleConseillersForSectionAverage(), state.planning, college);
+}
+
+/* =================================================================
+   RÉPARTITION PAR SYNDICAT — À L'ÉCHELLE DU CPH (toutes sections)
+   Demande de l'utilisateur (2026-09) : le président du CPH veut le même
+   pourcentage par syndicat que sectionAudiencesBySyndicatForCollege
+   ci-dessus, mais cumulé sur TOUTES les sections du CPH plutôt qu'une
+   seule, en séparant toujours syndicats salariés (collège Salarié) et
+   syndicats patronaux (collège Employeur).
+
+   Volontairement "pas trop lourd" (demande explicite) : SECTIONS est une
+   liste FIXE et universelle (les 5 sections légales, identiques pour tout
+   CPH) — inutile de "découvrir" ou de mémoriser quelles sections existent
+   pour un CPH donné, il suffit d'interroger le registre pour chacune des 5
+   et d'ignorer celles qui n'ont pas encore été créées (lookupAdminRegistry
+   renvoie déjà proprement `null` dans ce cas). Aucun nouvel état à
+   persister, aucune infrastructure de découverte à construire. */
+function loadCphSectionsForStats(cph){
+  return Promise.all(SECTIONS.map(function(section){
+    return lookupAdminRegistry(adminSessionCode, cph, section).then(function(sectionCode){
+      if(!sectionCode) return null;
+      return pullSectionSync(sectionCode).then(function(result){
+        if(!result) return null;
+        return {
+          section: section,
+          members: (result.payload && result.payload.sectionMembers) || [],
+          planning: (result.payload && result.payload.planning) || []
+        };
+      });
+    }).catch(function(){ return null; });
+  })).then(function(results){ return results.filter(Boolean); });
+}
+/* Combine les membres/planning de toutes les sections déjà chargées
+   (loadCphSectionsForStats) avant de les passer à audiencesBySyndicatIn —
+   sans risque de collision d'identifiants entre sections (uid() est unique
+   dans toute l'application, jamais réutilisé d'une section à l'autre). */
+function cphAudiencesBySyndicatForCollege(sectionsData, college){
+  var members = [], planning = [];
+  (sectionsData||[]).forEach(function(sd){
+    members = members.concat(sd.members||[]);
+    planning = planning.concat(sd.planning||[]);
+  });
+  return audiencesBySyndicatIn(members, planning, college);
 }
 
 function computeMyActivityStats(){
@@ -7063,6 +7118,105 @@ renderers["section-audience-ranking"] = function(root){
     root.appendChild(synPanel);
     root.appendChild(h("div", {class:"footnote"}, "Pourcentage du total des audiences ("+syndData.grandTotal+") de votre collège cette année, réparties selon le syndicat/l’organisation déclaré(e) sur la fiche de chaque conseiller ordinaire."));
   }
+};
+
+/* Panneau "barres + pourcentage" partagé par section-audience-ranking
+   ci-dessus et cph-syndicat-stats ci-dessous, pour ne jamais dupliquer ce
+   rendu entre les deux échelles (section / CPH entier). */
+function appendSyndicatBarPanel(root, syndData, emptyMsg){
+  var medals = ["🥇","🥈","🥉"];
+  if(!syndData || !syndData.grandTotal){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, emptyMsg)));
+    return;
+  }
+  var maxPct = Math.max.apply(null, syndData.rows.map(function(r){ return r.pct; }).concat([1]));
+  var panel = h("div", {class:"panel"});
+  syndData.rows.forEach(function(r, i){
+    var pct = Math.max(8, Math.round((r.pct/maxPct)*100));
+    panel.appendChild(h("div", {class:"stats-row"},
+      h("div", {class:"stats-row-bar", style:"width:"+pct+"%"}),
+      h("div", {class:"stats-row-content"},
+        h("div", {class:"stats-row-rank"}, medals[i] || ""),
+        h("div", {class:"stats-row-main"},
+          h("div", {class:"stats-row-title"}, r.label),
+          h("div", {class:"stats-row-sub"}, r.total+(r.total>1 ? " audiences" : " audience"))
+        ),
+        h("div", {class:"stats-row-val"}, r.pct.toFixed(1).replace(".", ",")+" %")
+      )
+    ));
+  });
+  root.appendChild(panel);
+}
+
+/* =================================================================
+   ÉCRAN — RÉPARTITION PAR SYNDICAT, TOUT LE CPH (voir
+   loadCphSectionsForStats / cphAudiencesBySyndicatForCollege plus haut) —
+   demande explicite de l'utilisateur (2026-09) : le président du CPH veut
+   le pourcentage d'audiences par syndicat, syndicats salariés et
+   syndicats patronaux séparés, cumulé sur toutes les sections du CPH
+   plutôt qu'une seule. Réservé au même administrateur désigné que
+   « Administrer le CPH », et redemande le code à 8 chiffres si la session
+   ne l'a pas déjà (ce code est la clé de déchiffrement réelle des données
+   d'une section, il n'y a pas de raccourci possible autour de lui). */
+var cphSyndicatStatsState = { loading:false, data:null, cph:null };
+renderers["cph-syndicat-stats"] = function(root){
+  if(!isDesignatedAdmin()){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Cet écran est réservé à l’administrateur désigné.")));
+    return;
+  }
+  var cph = state.profile.cph || "Béziers";
+
+  if(!adminSessionCode){
+    root.appendChild(h("p", {class:"lede"}, "Cette vue combine les données de toutes les sections du CPH de "+cph+" — elle demande donc le code administrateur à 8 chiffres, seule clé permettant de déchiffrer les autres sections."));
+    root.appendChild(h("button", {class:"sheet-btn accent", onclick:function(){
+      openAdminCodeGateSheet(function(){ cphSyndicatStatsState = { loading:false, data:null, cph:null }; render("cph-syndicat-stats"); });
+    }}, "Entrer le code administrateur"));
+    return;
+  }
+
+  if(cphSyndicatStatsState.loading){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des sections du CPH de "+cph+"…")));
+    return;
+  }
+
+  if(!cphSyndicatStatsState.data || cphSyndicatStatsState.cph!==cph){
+    cphSyndicatStatsState = { loading:true, data:null, cph:cph };
+    loadCphSectionsForStats(cph).then(function(sectionsData){
+      cphSyndicatStatsState = { loading:false, data:sectionsData, cph:cph };
+      render("cph-syndicat-stats");
+    }).catch(function(){
+      cphSyndicatStatsState = { loading:false, data:[], cph:cph };
+      toast("Impossible de récupérer les sections pour le moment (connexion ?).");
+      render("cph-syndicat-stats");
+    });
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des sections du CPH de "+cph+"…")));
+    return;
+  }
+
+  var sectionsData = cphSyndicatStatsState.data;
+  var foundNames = sectionsData.map(function(sd){ return sd.section; });
+  var missingNames = SECTIONS.filter(function(s){ return foundNames.indexOf(s)===-1; });
+
+  root.appendChild(h("p", {class:"lede"}, "Part des audiences BJ/BCO de l’année "+currentYearStr()+" (réalisées et à venir cumulées) tenue par chaque syndicat, toutes sections du CPH de "+cph+" confondues — syndicats salariés et syndicats patronaux séparés."));
+  root.appendChild(h("button", {class:"sheet-btn ghost small", style:"margin-bottom:10px", onclick:function(){
+    cphSyndicatStatsState = { loading:false, data:null, cph:null }; render("cph-syndicat-stats");
+  }}, "Actualiser"));
+
+  if(missingNames.length){
+    root.appendChild(h("div", {class:"footnote", style:"margin-bottom:10px"},
+      sectionsData.length
+        ? "Section"+(foundNames.length>1?"s":"")+" trouvée"+(foundNames.length>1?"s":"")+" : "+foundNames.join(", ")+". Pas encore de données pour : "+missingNames.join(", ")+"."
+        : "Aucune section du CPH de "+cph+" n’a encore de données enregistrées."
+    ));
+  }
+
+  root.appendChild(h("div", {class:"section-title"}, "Syndicats salariés"));
+  appendSyndicatBarPanel(root, cphAudiencesBySyndicatForCollege(sectionsData, "Salarié"), "Aucune audience enregistrée cette année côté collège salarié.");
+
+  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px;"}, "Syndicats patronaux"));
+  appendSyndicatBarPanel(root, cphAudiencesBySyndicatForCollege(sectionsData, "Employeur"), "Aucune audience enregistrée cette année côté collège employeur.");
+
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:16px"}, "Pourcentage du total des audiences de chaque collège, tous conseillers confondus (y compris présidents et vice-présidents de section — contrairement à la moyenne « par conseiller », il s’agit ici de la part réelle de l’activité totale, pas d’une charge à comparer)."));
 };
 
 /* =================================================================
@@ -11776,11 +11930,21 @@ renderers["admin-cph"] = function(root){
   ));
   root.appendChild(pfPanel);
 
+  root.appendChild(h("div", {class:"section-title"}, "Statistiques"));
+  var statsPanel = h("div", {class:"panel"});
+  statsPanel.appendChild(h("div", {class:"row-click", onclick:function(){ cphSyndicatStatsState = { loading:false, data:null, cph:null }; go("cph-syndicat-stats"); }},
+    h("div", {class:"rc-main"},
+      h("div", {class:"rc-title"}, "Répartition par syndicat"),
+      h("div", {class:"rc-sub"}, "Pourcentage d’audiences par syndicat, salariés et patronaux séparés, toutes sections du CPH")
+    ),
+    icon("ic-chev", "chev")
+  ));
+  root.appendChild(statsPanel);
+
   root.appendChild(h("div", {class:"section-title"}, "Pistes possibles"));
   var ideasPanel = h("div", {class:"panel"});
   [
     {title:"Sections et présidents", sub:"Vue d’ensemble de l’organisation du CPH"},
-    {title:"Statistiques d’activité", sub:"Volumes d’audiences, délais, tendances"},
     {title:"Annuaire des conseillers", sub:"Tous collèges et sections confondus"},
     {title:"Documents et procédures", sub:"Ressources communes au conseil"}
   ].forEach(function(idea){
