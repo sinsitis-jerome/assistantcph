@@ -6761,21 +6761,34 @@ function computeMyActivityStats(){
   var planFuture = planYear.filter(function(e){ return e.date>=today; });
   var planPast = planYear.filter(function(e){ return e.date<today; });
 
-  function vacCount(natureIds){ return vacYear.filter(function(v){ return natureIds.indexOf(v.nature)!==-1; }).length; }
   function planCount(list, types){ return list.filter(function(e){ return types.indexOf(e.type)!==-1; }).length; }
   function avgMinutes(list){
     if(!list.length) return null;
     return Math.round(list.reduce(function(s,v){ return s+(v.minutes||0); }, 0) / list.length);
   }
 
-  var bjDone = vacCount(["audience-bj"]);
+  /* Corrigé (2026-09, sur demande de l'utilisateur) : "Réalisées" se
+     basait auparavant sur les vacations déclarées (vacCount) tandis que
+     "À venir" se basait sur le planning (planCount) — deux sources
+     différentes, dont les chiffres pouvaient diverger de ce qui
+     apparaissait réellement dans "Mon planning" (ex. audience présente
+     au planning mais vacation pas encore/mal déclarée, ou l'inverse).
+     Simplifié : les deux se basent maintenant uniquement sur le planning
+     (passé = réalisé, futur = à venir), comme c'était déjà le cas pour
+     "Présidences" ci-dessous — une seule source de vérité, cohérente
+     avec l'écran "Mon planning". */
+  var bjDone = planCount(planPast, ["bj"]);
   var bjUpcoming = planCount(planFuture, ["bj"]);
-  var bcoDone = vacCount(["audience-bco"]);
+  var bcoDone = planCount(planPast, ["bco","bco-mee"]);
   var bcoUpcoming = planCount(planFuture, ["bco","bco-mee"]);
 
   var audiencesDone = bjDone + bcoDone;
   var audiencesUpcoming = bjUpcoming + bcoUpcoming;
 
+  /* Exception à la simplification ci-dessus : la durée moyenne d'une
+     audience n'a pas d'équivalent dans le planning (qui ne porte que le
+     type/la date, jamais d'horaires) — elle reste donc calculée à partir
+     des vacations déclarées, seule source disponible pour une durée. */
   var audienceVacYear = vacYear.filter(function(v){ return v.nature==="audience-bj" || v.nature==="audience-bco"; });
 
   var presidencesDone = planPast.filter(function(e){ return e.role==="president"; }).length;
