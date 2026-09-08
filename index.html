@@ -6783,10 +6783,22 @@ function computeMyActivityStats(){
 
   var redactionVac = vacYear.filter(function(v){ return REDACTION_NATURE_IDS.indexOf(v.nature)!==-1; });
 
-  var inWorkTotal = 0, outWorkTotal = 0;
+  /* Temps de travail déclaré (en/hors temps de travail) : vacationSplit
+     ne peut calculer ce partage QUE si la vacation porte des horaires de
+     journée de travail (workStart/workEnd) — champs qui ne sont proposés
+     à la saisie que lorsque state.profile.remunere===true (voir
+     openVacationForm). Un profil non déclaré "salarié(e) rémunéré(e)"
+     enregistre donc systématiquement des vacations sans ces horaires, ce
+     qui donnait ici un panneau à "0 min" silencieux et trompeur (signalé
+     par l'utilisateur comme un bug alors que ses vacations étaient bien
+     enregistrées) plutôt qu'une explication claire — voir remunereKnown
+     et incompleteWorkSplit ci-dessous, utilisés par renderMyActivity pour
+     remplacer ce panneau par un message explicite dans ce cas, plutôt que
+     de continuer à afficher des zéros qui ressemblent à un bug. */
+  var inWorkTotal = 0, outWorkTotal = 0, incompleteWorkSplit = 0;
   vacYear.forEach(function(v){
     var sp = vacationSplit(v);
-    if(sp.inWork!=null) inWorkTotal += sp.inWork;
+    if(sp.inWork!=null) inWorkTotal += sp.inWork; else incompleteWorkSplit++;
     if(sp.outWork!=null) outWorkTotal += sp.outWork;
   });
 
@@ -6816,6 +6828,7 @@ function computeMyActivityStats(){
     redactionsDone: redactionVac.length,
     avgRedactionMin: avgMinutes(redactionVac),
     inWorkTotal: inWorkTotal, outWorkTotal: outWorkTotal, workTotal: inWorkTotal+outWorkTotal,
+    incompleteWorkSplit: incompleteWorkSplit, vacYearCount: vacYear.length, remunere: state.profile.remunere===true,
     refereActive: refereActive, refereDone: refereDone, refereUpcoming: refereUpcoming, refereTotal: refereDone+refereUpcoming
   };
 }
@@ -6876,11 +6889,31 @@ function renderMyActivity(root){
     ["Réalisées", String(s.redactionsDone)],
     ["Durée moyenne", s.avgRedactionMin!=null ? minutesLabel(s.avgRedactionMin) : "—"]
   ]);
-  panel("Temps de travail déclaré", [
-    ["En temps de travail", minutesLabel(s.inWorkTotal)],
-    ["Hors temps de travail", minutesLabel(s.outWorkTotal)],
-    ["Total", minutesLabel(s.workTotal)]
-  ]);
+  /* Corrigé (2026-09) : ce panneau affichait silencieusement "0 min"
+     partout dès que le partage en/hors temps de travail était impossible
+     à calculer (voir incompleteWorkSplit dans computeMyActivityStats),
+     notamment pour tout profil dont l'activité salariée n'est pas
+     déclarée "Oui" — les horaires de journée de travail ne sont alors
+     jamais demandés à la saisie d'une vacation, donc jamais disponibles
+     ici. Signalé par l'utilisateur comme un bug (des vacations bien
+     enregistrées, mais rien dans ce panneau) : remplacé par un message
+     explicite dans ce cas, plutôt que des zéros qui ressemblent à un
+     calcul cassé. */
+  root.appendChild(h("div", {class:"section-title", style:"font-size:.92rem; margin:18px 0 8px;"}, "Temps de travail déclaré"));
+  if(!s.remunere){
+    root.appendChild(h("div", {class:"panel"},
+      h("div", {class:"footnote", style:"padding:2px 2px 4px;"}, "Non applicable : votre profil n’indique pas d’activité salariée rémunérée (Réglages > Votre profil > Activité salariée). Sans cette information, l’application ne demande jamais vos horaires de journée de travail, donc ne peut pas calculer ce partage — même si vos vacations sont par ailleurs bien enregistrées.")
+    ));
+  } else {
+    var workInfo = h("div", {class:"info-list panel"});
+    [["En temps de travail", minutesLabel(s.inWorkTotal)], ["Hors temps de travail", minutesLabel(s.outWorkTotal)], ["Total", minutesLabel(s.workTotal)]].forEach(function(r){
+      workInfo.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, r[0]), h("div", {class:"info-value"}, r[1])));
+    });
+    root.appendChild(workInfo);
+    if(s.incompleteWorkSplit>0){
+      root.appendChild(h("div", {class:"footnote", style:"margin-top:6px"}, s.incompleteWorkSplit+" vacation"+(s.incompleteWorkSplit>1?"s":"")+" sur "+s.vacYearCount+" sans horaires de journée de travail renseignés — non comptabilisée"+(s.incompleteWorkSplit>1?"s":"")+" ci-dessus."));
+    }
+  }
 }
 
 renderers.stats = function(root){
