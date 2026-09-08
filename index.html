@@ -9267,6 +9267,18 @@ function collegeSuffix(college){
   return college==="Salarié" ? " (S)" : college==="Employeur" ? " (E)" : "";
 }
 
+/* Identifiant spécial (comme "__self__") pour le rôle « Autre section »,
+   ajouté sur demande de l'utilisateur : président(e)/vice-président(e) de
+   section et administrateur ont parfois besoin de renseigner une audience
+   tenue par un conseiller VENU D'UNE AUTRE SECTION (échange ponctuel entre
+   sections) sans avoir à créer sa fiche dans l'annuaire de cette section.
+   Ce choix compte comme un rôle rempli (voir mergedEntryCompleteness) —
+   l'audience s'affiche donc bien comme complète — mais ne correspond à
+   aucun conseiller réel de la liste : sans nom à afficher, contrairement à
+   "__self__". Jamais proposé sur "Mon planning" (import personnel), qui
+   reste réservé aux plannings reçus d'une autre section/du même conseiller. */
+var OTHER_SECTION_ID = "__other-section__";
+
 /* Version générique (liste de conseillers explicite) sous-jacente à
    resolveMemberName (state.sectionMembers) ET à la vue combinée d'une
    audience côté espace administrateur (adminBuffer.sectionMembers — voir
@@ -9274,6 +9286,7 @@ function collegeSuffix(college){
 function resolveMemberNameIn(members, id){
   if(!id) return "";
   if(id==="__self__") return "Moi-même"+(fullName(state.profile) ? " — "+fullName(state.profile)+collegeSuffix(state.profile.college) : "");
+  if(id===OTHER_SECTION_ID) return "Autre section";
   var m = members.filter(function(x){ return x.id===id; })[0];
   return m ? memberDisplayName(m)+collegeSuffix(m.college) : "(Conseiller supprimé)";
 }
@@ -9346,6 +9359,7 @@ function openPlanningForm(existing, defaultType, prefill){
     candidates.forEach(function(c){
       opts.push(h("option", {value:c.id}, candidateOptionLabel(c, typeId)));
     });
+    opts.push(h("option", {value:OTHER_SECTION_ID}, "Autre section"));
     return h("select", null, opts);
   }
 
@@ -9417,13 +9431,13 @@ function openPlanningForm(existing, defaultType, prefill){
 
     /* Pré-sélection des valeurs existantes, une fois les menus reconstruits. */
     if(presidentSel){
-      if(draft.president && (draft.president==="__self__" || candidates.some(function(c){ return c.id===draft.president; }))){
+      if(draft.president && (draft.president==="__self__" || draft.president===OTHER_SECTION_ID || candidates.some(function(c){ return c.id===draft.president; }))){
         presidentSel.value = draft.president;
       }
     }
     assesseurSels.forEach(function(sel, i){
       var val = draft.assesseurs[i];
-      if(val && (val==="__self__" || candidates.some(function(c){ return c.id===val; }))){
+      if(val && (val==="__self__" || val===OTHER_SECTION_ID || candidates.some(function(c){ return c.id===val; }))){
         sel.value = val;
       }
     });
@@ -9443,7 +9457,13 @@ function openPlanningForm(existing, defaultType, prefill){
     var picked = [];
     if(presidentSel && presidentSel.value) picked.push(presidentSel.value);
     assesseurSels.forEach(function(sel){ if(sel.value) picked.push(sel.value); });
-    var dupes = picked.filter(function(v, i){ return picked.indexOf(v)!==i; });
+    /* "Autre section" (voir OTHER_SECTION_ID) est exclu de cette vérification :
+       il ne désigne personne en particulier, donc le choisir plusieurs fois
+       pour la même date (deux assesseurs venus chacun d'une autre section,
+       par exemple) n'est pas une vraie double affectation de la même
+       personne. */
+    var dupes = picked.filter(function(v){ return v!==OTHER_SECTION_ID; })
+      .filter(function(v, i, arr){ return arr.indexOf(v)!==i; });
     if(dupes.length){ toast("Une même personne ne peut pas occuper deux rôles pour cette date."); return; }
 
     var entry = {
@@ -9498,6 +9518,12 @@ function openPlanningForm(existing, defaultType, prefill){
    pour pouvoir être ré-associé à un conseiller local à l'import. */
 function resolveMemberForExport(id){
   if(!id) return null;
+  /* "Autre section" (voir OTHER_SECTION_ID) ne correspond à aucun nom
+     réel : traité comme un rôle non renseigné pour ce fichier d'échange
+     entre collèges, qui ne sert qu'à ce que CHAQUE conseiller reconnaisse
+     SES PROPRES audiences par son nom — ce cas ne concerne jamais personne
+     de ce planning-ci. */
+  if(id===OTHER_SECTION_ID) return null;
   if(id==="__self__") return { nom: state.profile.nom||"", prenom: state.profile.prenom||"" };
   var m = state.sectionMembers.filter(function(x){ return x.id===id; })[0];
   return m ? { nom: m.nom||"", prenom: m.prenom||"" } : null;
@@ -10668,6 +10694,7 @@ function openAdminAudienceForm(group){
     function roleSelect(){
       var opts = [ h("option", {value:"", selected:"selected"}, "— Choisir —") ];
       candidates.forEach(function(c){ opts.push(h("option", {value:c.id}, candidateOptionLabel(c, type))); });
+      opts.push(h("option", {value:OTHER_SECTION_ID}, "Autre section"));
       return h("select", null, opts);
     }
 
@@ -10702,12 +10729,12 @@ function openAdminAudienceForm(group){
 
     var existing = group.byCollege[col];
     if(existing){
-      if(presidentSel && existing.president && candidates.some(function(c){ return c.id===existing.president; })){
+      if(presidentSel && existing.president && (existing.president===OTHER_SECTION_ID || candidates.some(function(c){ return c.id===existing.president; }))){
         presidentSel.value = existing.president;
       }
       assesseurSels.forEach(function(sel, i){
         var val = existing.assesseurs && existing.assesseurs[i];
-        if(val && candidates.some(function(c){ return c.id===val; })) sel.value = val;
+        if(val && (val===OTHER_SECTION_ID || candidates.some(function(c){ return c.id===val; }))) sel.value = val;
       });
     }
 
@@ -10728,7 +10755,11 @@ function openAdminAudienceForm(group){
       if(s.president && s.president.value) picked.push(s.president.value);
       s.assesseurs.forEach(function(sel){ if(sel.value) picked.push(sel.value); });
     });
-    var dupes = picked.filter(function(v, i){ return picked.indexOf(v)!==i; });
+    /* "Autre section" exclu de la vérification anti-doublon (voir même
+       remarque dans openPlanningForm) : il ne désigne personne en
+       particulier. */
+    var dupes = picked.filter(function(v){ return v!==OTHER_SECTION_ID; })
+      .filter(function(v, i, arr){ return arr.indexOf(v)!==i; });
     if(dupes.length){ toast("Une même personne ne peut pas occuper deux rôles pour cette date."); return; }
 
     COLLEGES.forEach(function(col){
