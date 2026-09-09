@@ -9911,20 +9911,33 @@ function buildInviteSmsBody(sectionCode, pin){
 
 /* Message SMS "Demander un échange" (bouton dédié sur chaque fiche de la
    liste de candidats, voir openExchangeCandidatesSheet) — texte et
-   retours à la ligne imposés tels quels par l'utilisateur. Un simple
-   raccourci de premier contact hors application (même limite que
+   retours à la ligne imposés tels quels par l'utilisateur pour la version
+   d'origine (tier 1, avant l'ajout du remplacement simple), adapté depuis
+   selon le tier pour rester cohérent avec l'écran de confirmation qui
+   suit réellement l'acceptation (openExchangeConfirmSheet) : au tier 1
+   (même syndicat), le candidat peut désormais aussi bien proposer un
+   remplacement simple qu'un vrai échange, donc le premier message ne doit
+   plus présupposer qu'une audience sera systématiquement reprise en
+   retour ; au tier 2 (syndicat différent), l'échange reste seul possible
+   (parité issue des élections professionnelles), donc le message le dit
+   d'emblée pour éviter toute proposition de simple remplacement qui serait
+   de toute façon refusée à l'étape suivante. Un simple raccourci de
+   premier contact hors application (même limite que
    buildInviteSmsBody/openSmsCompose ci-dessus : ouverture pré-remplie de
    l'app SMS, rien d'automatique) — ne modifie ni n'envoie rien dans
    l'application elle-même ; le parcours d'échange (case à cocher « écrit »,
    application réelle dans le planning) reste inchangé et se poursuit
    séparément une fois la personne effectivement d'accord. */
-function buildExchangeRequestSmsBody(candidatePrenom, typeLabel, dateLabel){
+function buildExchangeRequestSmsBody(candidatePrenom, typeLabel, dateLabel, tier){
+  var proposalLine = tier===2
+    ? "Si oui, il faudrait qu'on échange nos audiences (vous m'indiquez une audience de votre planning que je pourrais prendre à la place) — un vrai échange est nécessaire entre nos syndicats pour respecter la parité issue des élections professionnelles."
+    : "Si oui, on peut soit échanger nos audiences (vous m'indiquez une audience de votre planning que je pourrais prendre à la place), soit simplement vous remplacer sans rien vous demander en retour — comme vous préférez.";
   return [
     "Bonjour "+candidatePrenom+",",
     "",
     "Seriez-vous disponible pour siéger à ma place lors du "+typeLabel+" du "+dateLabel+" ?",
     "",
-    "Si oui, pourriez-vous m'indiquer une audience de votre planning que je pourrais prendre à la place ?",
+    proposalLine,
     "",
     "Un grand merci,",
     state.profile.prenom || ""
@@ -10067,6 +10080,10 @@ function openExchangeCandidatesSheet(myEntry, meMember, tier){
     : "Aucun conseiller de votre syndicat n’a accepté — conseillers de votre collège mais d’un autre syndicat, classés du moins au plus sollicité :"));
   body.appendChild(h("p", {class:"lede", style:"font-weight:600"}, "Contactez en priorité les conseillers ci-dessous dans l’ordre indiqué."));
 
+  if(tier===2){
+    body.appendChild(h("p", {class:"footnote", style:"margin-top:-4px; margin-bottom:10px; font-weight:600;"}, "Si vous contactez un conseiller d’un autre syndicat que le vôtre, l’échange d’audiences est obligatoire afin de respecter les élections professionnelles."));
+  }
+
   var typeLabel = planningTypeLabel(myEntry.type);
   var dateLabel = planningDateLabel(myEntry.date);
 
@@ -10080,7 +10097,7 @@ function openExchangeCandidatesSheet(myEntry, meMember, tier){
           h("div", {class:"footnote"}, c.total+" audience"+(c.total>1?"s":"")+" au total"),
           m.tel ? h("button", {
             class:"icon-btn-round", title:"Envoyer un SMS pour demander l’échange",
-            onclick:function(){ openSmsCompose(m.tel, buildExchangeRequestSmsBody(m.prenom||"", typeLabel, dateLabel)); }
+            onclick:function(){ openSmsCompose(m.tel, buildExchangeRequestSmsBody(m.prenom||"", typeLabel, dateLabel, tier)); }
           }, icon("ic-sms")) : null
         )
       ),
@@ -10132,7 +10149,7 @@ function openExchangeAcceptedPicker(myEntry, meMember, ranked, tier){
   var nextBtn = h("button", {class:"sheet-btn accent", style:"margin-top:14px", disabled:"disabled", onclick:function(){
     var chosen = ranked[Number(sel.value)];
     if(!chosen) return;
-    openExchangeConfirmSheet(myEntry, meMember, chosen.member);
+    openExchangeConfirmSheet(myEntry, meMember, chosen.member, tier);
   }}, "Continuer");
   sel.addEventListener("change", function(){ nextBtn.disabled = !sel.value; });
   body.appendChild(nextBtn);
@@ -10141,34 +10158,55 @@ function openExchangeAcceptedPicker(myEntry, meMember, ranked, tier){
 }
 
 /* Étape 3 : confirmation obligatoire d'un écrit — case à cocher (jamais
-   pré-cochée), bouton de validation désactivé tant qu'elle ne l'est pas
-   (voir échange avec l'utilisateur : « une fenêtre de confirmation
+   pré-cochée), bouton(s) de validation désactivé(s) tant qu'elle ne l'est
+   pas (voir échange avec l'utilisateur : « une fenêtre de confirmation
    apparait demandant à l'utilisateur de cocher une case comme quoi il
    dispose d'un écrit... ce n'est qu'une fois que la case est cochée que
    l'utilisateur peut valider »). Rien n'est modifié à ce stade : seule
-   l'étape suivante (choix de l'audience) déclenche réellement l'échange. */
-function openExchangeConfirmSheet(myEntry, meMember, candidateMember){
+   l'étape suivante (choix de l'audience, ou le remplacement direct au
+   tier 1) déclenche réellement le changement.
+   À l'étape 1 (même syndicat), l'utilisateur a le choix entre un vrai
+   échange et un simple remplacement sans rien donner en retour. À
+   l'étape 2 (syndicat différent), seul un vrai échange est proposé — afin
+   de respecter la parité issue des élections professionnelles, voir
+   commentaire du module ci-dessus et le message déjà affiché sur la liste
+   des candidats de l'étape 2 (openExchangeCandidatesSheet). */
+function openExchangeConfirmSheet(myEntry, meMember, candidateMember, tier){
   var body = h("div", null);
   body.appendChild(h("p", {class:"lede"},
     "Avant de continuer, confirmez que vous disposez bien d’un ",
     h("span", {style:"font-weight:700; text-decoration:underline"}, "écrit"),
-    " (mail ou SMS) de "+memberDisplayName(candidateMember)+" actant son accord pour cet échange."
+    " (mail ou SMS) de "+memberDisplayName(candidateMember)+" actant son accord."
   ));
 
   var label = h("label", {style:"display:flex; align-items:flex-start; gap:8px; margin-top:12px; cursor:pointer;"});
   var checkbox = h("input", {type:"checkbox"});
   label.appendChild(checkbox);
-  label.appendChild(h("span", null, "Je dispose d’un écrit de "+memberDisplayName(candidateMember)+" actant son accord pour cet échange."));
+  label.appendChild(h("span", null, "Je dispose d’un écrit de "+memberDisplayName(candidateMember)+" actant son accord."));
   body.appendChild(label);
 
-  var nextBtn = h("button", {class:"sheet-btn accent", style:"margin-top:14px", disabled:"disabled", onclick:function(){
-    openExchangeTargetPicker(myEntry, meMember, candidateMember);
-  }}, "Valider l’échange");
-  checkbox.addEventListener("change", function(){ nextBtn.disabled = !checkbox.checked; });
-  body.appendChild(nextBtn);
+  if(tier===1){
+    body.appendChild(h("p", {class:"footnote", style:"margin-top:12px"}, "Vous pouvez proposer un vrai échange d’audiences, ou simplement vous faire remplacer sans rien donner en retour."));
+    var exchangeBtn = h("button", {class:"sheet-btn accent", style:"margin-top:10px", disabled:"disabled", onclick:function(){
+      openExchangeTargetPicker(myEntry, meMember, candidateMember);
+    }}, "Proposer un échange");
+    var replaceBtn = h("button", {class:"sheet-btn ghost", style:"margin-top:8px", disabled:"disabled", onclick:function(){
+      performReplacement(myEntry, meMember, candidateMember);
+    }}, "Simple remplacement (sans échange)");
+    checkbox.addEventListener("change", function(){ exchangeBtn.disabled = !checkbox.checked; replaceBtn.disabled = !checkbox.checked; });
+    body.appendChild(exchangeBtn);
+    body.appendChild(replaceBtn);
+  } else {
+    body.appendChild(h("p", {class:"footnote", style:"margin-top:12px; font-weight:600;"}, "Conseiller d’un autre syndicat que le vôtre : l’échange d’audiences est obligatoire afin de respecter les élections professionnelles."));
+    var nextBtn = h("button", {class:"sheet-btn accent", style:"margin-top:10px", disabled:"disabled", onclick:function(){
+      openExchangeTargetPicker(myEntry, meMember, candidateMember);
+    }}, "Valider l’échange");
+    checkbox.addEventListener("change", function(){ nextBtn.disabled = !checkbox.checked; });
+    body.appendChild(nextBtn);
+  }
   body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler"));
 
-  openSheet("Confirmer l’échange", body);
+  openSheet(tier===1 ? "Confirmer l’accord" : "Confirmer l’échange", body);
 }
 
 /* Étape 4 : choix, parmi les audiences À VENIR du conseiller ayant
@@ -10258,6 +10296,40 @@ function performExchange(myEntry, meMember, candidateEntry, candidateMember){
       h("button", {class:"sheet-btn accent", onclick:function(){
         pushSectionSync(state.sync.sectionCode, cph, section).then(function(){
           markSyncDone(); closeSheet(); toast("Échange envoyé à la section.");
+        }).catch(function(){ toast("Échec de l’envoi — réessayez plus tard."); });
+      }}, "Réessayer l’envoi"),
+      h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Plus tard")
+    ));
+  });
+}
+
+/* Variante à sens unique de performExchange, réservée à l'étape 1 (même
+   syndicat) : le candidat prend la place de l'utilisateur sur myEntry,
+   mais aucune audience ne lui est reprise en retour — donc une seule
+   ligne de state.planning est modifiée, jamais deux. Mêmes garanties que
+   performExchange par ailleurs (rôle et collège de la ligne inchangés,
+   enregistrement local immédiat puis envoi à Firestore, échange jamais
+   perdu en cas d'échec réseau). */
+function performReplacement(myEntry, meMember, candidateMember){
+  if(state.sync.revoked) return; // écran de blocage géré par render() — ne devrait jamais être atteignable ici
+  if(myEntry.president===meMember.id) myEntry.president = candidateMember.id;
+  myEntry.assesseurs = (myEntry.assesseurs||[]).map(function(id){ return id===meMember.id ? candidateMember.id : id; });
+  saveState();
+  closeSheet();
+  toast("Remplacement enregistré — envoi à la section en cours…");
+  var cph = cphLabel(state.profile) || state.profile.cph || "";
+  var section = state.profile.section || "";
+  pushSectionSync(state.sync.sectionCode, cph, section).then(function(){
+    markSyncDone();
+    toast("Remplacement enregistré et envoyé à la section.");
+    render("mon-planning");
+  }).catch(function(err){
+    render("mon-planning");
+    openSheet("Envoi à la section échoué", h("div", null,
+      h("p", {class:"lede"}, "Le remplacement est bien enregistré sur cet appareil, mais l’envoi à la section a échoué — vérifiez votre connexion."),
+      h("button", {class:"sheet-btn accent", onclick:function(){
+        pushSectionSync(state.sync.sectionCode, cph, section).then(function(){
+          markSyncDone(); closeSheet(); toast("Remplacement envoyé à la section.");
         }).catch(function(){ toast("Échec de l’envoi — réessayez plus tard."); });
       }}, "Réessayer l’envoi"),
       h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Plus tard")
