@@ -9931,7 +9931,7 @@ function buildInviteSmsBody(sectionCode, pin){
 function buildExchangeRequestSmsBody(candidatePrenom, typeLabel, dateLabel, tier){
   var proposalLine = tier===2
     ? "Si oui, il faudrait qu'on échange nos audiences (vous m'indiquez une audience de votre planning que je pourrais prendre à la place) — un vrai échange est nécessaire entre nos syndicats pour respecter la parité issue des élections professionnelles."
-    : "Si oui, on peut soit échanger nos audiences (vous m'indiquez une audience de votre planning que je pourrais prendre à la place), soit simplement vous remplacer sans rien vous demander en retour — comme vous préférez.";
+    : "Si oui, on peut soit échanger nos audiences (vous m'indiquez une audience de votre planning que je pourrais prendre à la place), soit me remplacer sur mon audience sans procéder à un échange.";
   return [
     "Bonjour "+candidatePrenom+",",
     "",
