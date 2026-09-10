@@ -4288,7 +4288,8 @@ var SCREEN_TITLES = {
   "section-audience-ranking":"Classement de la section",
   "cph-syndicat-stats":"Répartition par syndicat",
   "mes-redactions":"Mes rédactions à faire", "deliberations-section":"Délibérés et rédactions",
-  "sysadmin-deliberations":"Délibérés et rédactions"
+  "sysadmin-deliberations":"Délibérés et rédactions",
+  "cph-deliberations-stats":"Délibérés et rédactions du CPH"
 };
 /* Écrans du parcours d'accueil : ni bouton retour ni icône Réglages tant
    qu'on y est (voir render() plus bas) — un conseiller ne doit pas
@@ -6915,9 +6916,98 @@ function deliberationsForPlanningEntry(planningEntryId){
   return (state.deliberations||[]).filter(function(d){ return d.planningEntryId===planningEntryId; })
     .sort(function(a,b){ return rgLabel(a).localeCompare(rgLabel(b), "fr"); });
 }
+/* Panneau "Dossiers en délibéré" rattaché à l'enregistrement qui préside
+   réellement une audience de BJ (presidingRec = group.byCollege[presidence],
+   voir openAudienceDetail) — partagé par openAudienceDetail (outil de
+   planification, côté président/vice-président de section) ET
+   openMyPlanningEntryDetail (« Mon planning », ouvert à tout conseiller) :
+   demande explicite de l'utilisateur (2026-09) — un(e) conseiller(e) qui
+   n'est ni président(e) ni vice-président(e) de section, mais qui préside
+   lui/elle-même une audience de BJ précise, doit pouvoir y rattacher un
+   dossier sans passer par l'outil de planification (auquel il/elle n'a
+   pas accès). Bouton "+ Ajouter un dossier" gardé par
+   canManageDeliberationFor, qui autorise déjà ce cas précis
+   (isSelfMemberId(rec.president)). */
+function appendDeliberationsPanel(body, presidingRec){
+  body.appendChild(h("div", {class:"section-title", style:"font-size:.9rem; margin-top:18px;"}, "Dossiers en délibéré"));
+  if(!presidingRec || !presidingRec.president){
+    body.appendChild(h("p", {class:"footnote"}, "Complétez d’abord le président de cette audience pour pouvoir y rattacher un dossier."));
+    return;
+  }
+  var dossiers = deliberationsForPlanningEntry(presidingRec.id);
+  var dPanel = h("div", {class:"panel"});
+  if(!dossiers.length){
+    dPanel.appendChild(h("p", {class:"lede", style:"margin:0"}, "Aucun dossier enregistré pour cette audience."));
+  } else {
+    dossiers.forEach(function(d){
+      dPanel.appendChild(h("div", {class:"row-click", onclick:function(){ closeSheet(); openDeliberationEntryDetail(d.id); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, "RG "+rgLabel(d)),
+          h("div", {class:"rc-sub"}, natureLabel(d.natureId)+" · "+(d.remis ? "Remis" : "Remise le "+planningDateLabel(deliberationRemiseDate(d))))
+        ),
+        icon("ic-chev", "chev")
+      ));
+    });
+  }
+  body.appendChild(dPanel);
+  if(canManageDeliberationFor(presidingRec.id)){
+    body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ closeSheet(); openDeliberationForm(presidingRec.id, null); }}, "+ Ajouter un dossier"));
+  }
+}
 function natureLabel(natureId){
   var n = NATURES.filter(function(x){ return x.id===natureId; })[0];
   return n ? n.label : "Rédaction";
+}
+/* Classement d'un dossier NON REMIS dans l'un des trois compteurs demandés
+   par le président de section / le président du CPH (voir échange avec
+   l'utilisateur, 2026-09) — deux temps bien distincts et jamais
+   chevauchants, plutôt qu'un simple cumul :
+     - "delibere"  : la séance de délibéré elle-même n'a pas encore eu
+                     lieu (dateDelibere encore à venir) — le dossier n'a
+                     même pas encore été discuté entre les conseillers.
+     - "redaction" : le délibéré a déjà eu lieu, la rédaction reste à
+                     remettre, mais la date de remise n'est pas encore
+                     dépassée.
+     - "retard"    : la date de remise (J-7 avant le prononcé) est
+                     dépassée et la rédaction n'est toujours pas remise —
+                     prioritaire sur "delibere" dans le cas résiduel où
+                     les deux seraient vraies à la fois (ne devrait pas
+                     arriver vu les bornes imposées par openDeliberationForm,
+                     mais la rédaction en retard reste alors la lecture la
+                     plus utile). null si le dossier est déjà remis : il ne
+                     compte alors dans aucun des trois. */
+function deliberationStatusBucket(d, today){
+  if(!d || d.remis) return null;
+  var remise = deliberationRemiseDate(d);
+  if(remise && remise<today) return "retard";
+  if(d.dateDelibere && d.dateDelibere>today) return "delibere";
+  return "redaction";
+}
+/* Décompte des trois compteurs pour un tableau de dossiers donné — utilisé
+   tel quel pour la section courante (state.deliberations) comme pour une
+   section distante déjà pulled (voir loadCphSectionsForDeliberationStats,
+   côté "Administrer le CPH"), d'où le paramètre plutôt qu'une lecture
+   directe de state ici. */
+function countDeliberationBuckets(deliberations){
+  var today = todayISO();
+  var out = { delibereEnAttente:0, redactionEnAttente:0, redactionEnRetard:0 };
+  (deliberations||[]).forEach(function(d){
+    var bucket = deliberationStatusBucket(d, today);
+    if(bucket==="delibere") out.delibereEnAttente++;
+    else if(bucket==="redaction") out.redactionEnAttente++;
+    else if(bucket==="retard") out.redactionEnRetard++;
+  });
+  return out;
+}
+/* Trois pavés de compteurs (voir countDeliberationBuckets), même style
+   visuel que les stat-box de renderers.stats — utilisé aussi bien pour la
+   section courante que pour chaque ligne de la vue CPH. */
+function deliberationCountsStatRow(counts){
+  return h("div", {class:"stat-row"},
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(counts.delibereEnAttente)), h("div", {class:"l"}, "Délibérés en attente")),
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(counts.redactionEnAttente)), h("div", {class:"l"}, "Rédactions en attente")),
+    h("div", {class:"stat-box"}, h("div", {class:"n"}, String(counts.redactionEnRetard)), h("div", {class:"l"}, "Rédactions en retard"))
+  );
 }
 /* Sauvegarde + envoi immédiat à la section — même schéma que
    performExchange/performReplacement (module ÉCHANGE) : jamais perdu en
@@ -7169,6 +7259,29 @@ function cphAudiencesBySyndicatForCollege(sectionsData, college){
     planning = planning.concat(sd.planning||[]);
   });
   return audiencesBySyndicatIn(members, planning, college);
+}
+
+/* Même principe que loadCphSectionsForStats ci-dessus, mais pour la vue
+   « Délibérés et rédactions, toutes sections » (voir renderers
+   ["cph-deliberations-stats"] plus bas) : on a ici besoin, en plus, du
+   tableau "deliberations" de chaque section — jamais chargé par
+   loadCphSectionsForStats, qui ne s'en sert pas. Fonction séparée plutôt
+   qu'un paramètre optionnel sur loadCphSectionsForStats, pour ne pas
+   payer le coût (taille du payload déchiffré) d'un tableau inutile dans
+   l'écran « Répartition par syndicat » qui ne l'affiche jamais. */
+function loadCphSectionsForDeliberationStats(cph){
+  return Promise.all(SECTIONS.map(function(section){
+    return lookupAdminRegistry(adminSessionCode, cph, section).then(function(sectionCode){
+      if(!sectionCode) return null;
+      return pullSectionSync(sectionCode).then(function(result){
+        if(!result) return null;
+        return {
+          section: section,
+          deliberations: (result.payload && result.payload.deliberations) || []
+        };
+      });
+    }).catch(function(){ return null; });
+  })).then(function(results){ return results.filter(Boolean); });
 }
 
 function computeMyActivityStats(){
@@ -7425,6 +7538,16 @@ renderers["section-audience-ranking"] = function(root){
     root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Cet écran est réservé au président ou à la vice-présidente de section.")));
     return;
   }
+  /* Compteurs délibérés/rédactions (voir countDeliberationBuckets et
+     l'échange avec l'utilisateur, 2026-09) : demande explicite du
+     président de section de voir, en un coup d'œil, où en est sa
+     section — placé en tête, avant le classement de charge d'audiences,
+     car c'est l'information la plus "actionnable" de cet écran. */
+  root.appendChild(h("div", {class:"section-title"}, "Délibérés et rédactions"));
+  root.appendChild(deliberationCountsStatRow(countDeliberationBuckets(state.deliberations)));
+  root.appendChild(h("button", {class:"sheet-btn ghost small", style:"margin-top:10px", onclick:function(){ go("deliberations-section"); }}, "Voir les dossiers"));
+
+  root.appendChild(h("div", {class:"section-title", style:"margin-top:20px;"}, "Charge d’audiences"));
   root.appendChild(h("p", {class:"lede"}, "Charge d’audiences ("+currentYearStr()+") des conseillers de la section, du plus au moins sollicité — président(e) et vice-président(e) de section exclus, comme pour la moyenne de la section."));
 
   var medals = ["🥇","🥈","🥉"];
@@ -7580,6 +7703,88 @@ renderers["cph-syndicat-stats"] = function(root){
   appendSyndicatBarPanel(root, cphAudiencesBySyndicatForCollege(sectionsData, "Employeur"), "Aucune audience enregistrée cette année côté collège employeur.");
 
   root.appendChild(h("div", {class:"footnote", style:"margin-top:16px"}, "Pourcentage du total des audiences de chaque collège, tous conseillers confondus (y compris présidents et vice-présidents de section — contrairement à la moyenne « par conseiller », il s’agit ici de la part réelle de l’activité totale, pas d’une charge à comparer)."));
+};
+
+/* =================================================================
+   ÉCRAN — DÉLIBÉRÉS ET RÉDACTIONS, TOUT LE CPH (voir
+   loadCphSectionsForDeliberationStats / countDeliberationBuckets plus
+   haut) — demande explicite de l'utilisateur (2026-09) : « Le président
+   du CPH doit pouvoir voir les mêmes choses [que le président de
+   section] réparties par section. » Même code-gate et même mécanique de
+   chargement que cph-syndicat-stats ci-dessus (état de chargement
+   propre, un seul appel réseau par section grâce à adminSessionCode déjà
+   saisi). Nom délibérément différent de "sysadmin-deliberations" (qui
+   sert à PILOTER une seule section depuis l'espace administrateur) :
+   cet écran-ci est un simple tableau de bord en lecture, jamais un lieu
+   pour créer/modifier un dossier. */
+var cphDeliberationsStatsState = { loading:false, data:null, cph:null };
+renderers["cph-deliberations-stats"] = function(root){
+  if(!isDesignatedAdmin()){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Cet écran est réservé à l’administrateur désigné.")));
+    return;
+  }
+  var cph = state.profile.cph || "Béziers";
+
+  if(!adminSessionCode){
+    root.appendChild(h("p", {class:"lede"}, "Cette vue combine les données de toutes les sections du CPH de "+cph+" — elle demande donc le code administrateur à 8 chiffres, seule clé permettant de déchiffrer les autres sections."));
+    root.appendChild(h("button", {class:"sheet-btn accent", onclick:function(){
+      openAdminCodeGateSheet(function(){ cphDeliberationsStatsState = { loading:false, data:null, cph:null }; render("cph-deliberations-stats"); });
+    }}, "Entrer le code administrateur"));
+    return;
+  }
+
+  if(cphDeliberationsStatsState.loading){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des sections du CPH de "+cph+"…")));
+    return;
+  }
+
+  if(!cphDeliberationsStatsState.data || cphDeliberationsStatsState.cph!==cph){
+    cphDeliberationsStatsState = { loading:true, data:null, cph:cph };
+    loadCphSectionsForDeliberationStats(cph).then(function(sectionsData){
+      cphDeliberationsStatsState = { loading:false, data:sectionsData, cph:cph };
+      render("cph-deliberations-stats");
+    }).catch(function(){
+      cphDeliberationsStatsState = { loading:false, data:[], cph:cph };
+      toast("Impossible de récupérer les sections pour le moment (connexion ?).");
+      render("cph-deliberations-stats");
+    });
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des sections du CPH de "+cph+"…")));
+    return;
+  }
+
+  var sectionsData = cphDeliberationsStatsState.data;
+  var foundNames = sectionsData.map(function(sd){ return sd.section; });
+  var missingNames = SECTIONS.filter(function(s){ return foundNames.indexOf(s)===-1; });
+
+  root.appendChild(h("p", {class:"lede"}, "Délibérés en attente, rédactions en attente et rédactions en retard, section par section, pour le CPH de "+cph+"."));
+  root.appendChild(h("button", {class:"sheet-btn ghost small", style:"margin-bottom:10px", onclick:function(){
+    cphDeliberationsStatsState = { loading:false, data:null, cph:null }; render("cph-deliberations-stats");
+  }}, "Actualiser"));
+
+  if(missingNames.length){
+    root.appendChild(h("div", {class:"footnote", style:"margin-bottom:10px"},
+      sectionsData.length
+        ? "Section"+(foundNames.length>1?"s":"")+" trouvée"+(foundNames.length>1?"s":"")+" : "+foundNames.join(", ")+". Pas encore de données pour : "+missingNames.join(", ")+"."
+        : "Aucune section du CPH de "+cph+" n’a encore de données enregistrées."
+    ));
+  }
+
+  var totals = { delibereEnAttente:0, redactionEnAttente:0, redactionEnRetard:0 };
+  sectionsData.forEach(function(sd){
+    var counts = countDeliberationBuckets(sd.deliberations);
+    root.appendChild(h("div", {class:"section-title"}, sd.section));
+    root.appendChild(deliberationCountsStatRow(counts));
+    totals.delibereEnAttente += counts.delibereEnAttente;
+    totals.redactionEnAttente += counts.redactionEnAttente;
+    totals.redactionEnRetard += counts.redactionEnRetard;
+  });
+
+  if(sectionsData.length>1){
+    root.appendChild(h("div", {class:"section-title", style:"margin-top:20px;"}, "Total du CPH"));
+    root.appendChild(deliberationCountsStatRow(totals));
+  }
+
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:16px"}, "Un dossier compte dans une seule des trois catégories : le délibéré n’a pas encore eu lieu, ou il a eu lieu et la rédaction reste à remettre dans les délais, ou le délai de remise est dépassé."));
 };
 
 /* =================================================================
@@ -10417,6 +10622,19 @@ function openMyPlanningEntryDetail(e){
   ));
   body.appendChild(panel);
 
+  /* Dossiers en délibéré (voir appendDeliberationsPanel) : « Mon planning »
+     ne connaît son audience que par date+type+nom (voir applyMyPlanningImport,
+     jamais l'identifiant réel state.planning), donc on retrouve ici le VRAI
+     enregistrement de section pour pouvoir y rattacher un dossier — accès
+     réservé, comme pour le reste de ce module, aux audiences de BJ avec
+     synchronisation Firebase active (state.sectionMembers/state.deliberations
+     à jour ; sans quoi isSelfMemberId et deliberationsForPlanningEntry ne
+     signifient rien). */
+  if(e.source!=="refere" && e.type==="bj" && state.sync.sectionCode){
+    var realGroup = groupPlanningByAudience(state.planning).filter(function(g){ return g.date===e.date && g.type===e.type; })[0] || null;
+    appendDeliberationsPanel(body, realGroup ? (realGroup.byCollege[realGroup.presidence] || null) : null);
+  }
+
   /* Deux façons bien différentes de « demander un échange » selon que
      l'appareil dispose ou non d'une synchronisation Firebase active (voir
      échange avec l'utilisateur, demande du module ÉCHANGE AUTOMATISÉ
@@ -11394,31 +11612,7 @@ function openAudienceDetail(group, opts){
      véritable "président de cette audience", voir canManageDeliberationFor)
      — indisponible tant que ce président n'est pas renseigné. */
   if(group.type==="bj"){
-    var presidingRec = group.byCollege[group.presidence] || null;
-    body.appendChild(h("div", {class:"section-title", style:"font-size:.9rem; margin-top:18px;"}, "Dossiers en délibéré"));
-    if(!presidingRec || !presidingRec.president){
-      body.appendChild(h("p", {class:"footnote"}, "Complétez d’abord le président de cette audience pour pouvoir y rattacher un dossier."));
-    } else {
-      var dossiers = deliberationsForPlanningEntry(presidingRec.id);
-      var dPanel = h("div", {class:"panel"});
-      if(!dossiers.length){
-        dPanel.appendChild(h("p", {class:"lede", style:"margin:0"}, "Aucun dossier enregistré pour cette audience."));
-      } else {
-        dossiers.forEach(function(d){
-          dPanel.appendChild(h("div", {class:"row-click", onclick:function(){ closeSheet(); openDeliberationEntryDetail(d.id); }},
-            h("div", {class:"rc-main"},
-              h("div", {class:"rc-title"}, "RG "+rgLabel(d)),
-              h("div", {class:"rc-sub"}, natureLabel(d.natureId)+" · "+(d.remis ? "Remis" : "Remise le "+planningDateLabel(deliberationRemiseDate(d))))
-            ),
-            icon("ic-chev", "chev")
-          ));
-        });
-      }
-      body.appendChild(dPanel);
-      if(canManageDeliberationFor(presidingRec.id)){
-        body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ closeSheet(); openDeliberationForm(presidingRec.id, null); }}, "+ Ajouter un dossier"));
-      }
-    }
+    appendDeliberationsPanel(body, group.byCollege[group.presidence] || null);
   }
 
   editableColleges.forEach(function(col, i){
@@ -11451,15 +11645,26 @@ function openDeliberationForm(planningEntryId, existingId){
   }));
   form.appendChild(natureSel);
 
-  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Numéro RG"));
+  /* Année et numéro l'un SOUS l'autre plutôt que côte à côte (revue UI,
+     2026-09) : un <select> hérite de la règle globale "width:100%" (voir
+     CSS, input[type=text]... select{width:100%}), qui l'emporte sur un
+     simple "flex:0 0 auto" — placés côte à côte dans un flex-row, le
+     select de l'année s'étirait donc sur presque toute la largeur,
+     réduisant le numéro de RG à un filet quasi invisible tout à droite.
+     Empiler les deux, chacun sur toute la largeur, évite ce piège plutôt
+     que de rajouter une largeur figée qui casserait à nouveau sur un
+     écran étroit. */
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Année du RG"));
   var currentYear = new Date().getFullYear();
   var yearOpts = []; for(var y=currentYear-2; y<=currentYear+3; y++) yearOpts.push(y);
-  var anneeSel = h("select", {style:"flex:0 0 auto"}, yearOpts.map(function(y){
+  var anneeSel = h("select", null, yearOpts.map(function(y){
     return h("option", {value:String(y), selected: (existing ? existing.rgAnnee : String(currentYear))===String(y) ? "selected" : null}, String(y));
   }));
-  var numeroIn = h("input", {type:"text", inputmode:"numeric", maxlength:"8", placeholder:"00004587", style:"flex:1", value: existing ? existing.rgNumero : ""});
+  form.appendChild(anneeSel);
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:10px"}, "Numéro RG"));
+  var numeroIn = h("input", {type:"text", inputmode:"numeric", maxlength:"8", placeholder:"00004587", value: existing ? existing.rgNumero : ""});
   numeroIn.addEventListener("blur", function(){ numeroIn.value = padRg8(numeroIn.value); });
-  form.appendChild(h("div", {style:"display:flex; gap:8px;"}, anneeSel, numeroIn));
+  form.appendChild(numeroIn);
   form.appendChild(h("div", {class:"footnote", style:"margin-top:4px"}, "Aucun nom de partie — seul le numéro de RG identifie le dossier (les chiffres manquants sont complétés par des zéros)."));
 
   form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Rédacteur"));
@@ -11672,15 +11877,26 @@ function openSysadminDeliberationForm(planningEntryId, existingId, reRenderScree
   }));
   form.appendChild(natureSel);
 
-  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Numéro RG"));
+  /* Année et numéro l'un SOUS l'autre plutôt que côte à côte (revue UI,
+     2026-09) : un <select> hérite de la règle globale "width:100%" (voir
+     CSS, input[type=text]... select{width:100%}), qui l'emporte sur un
+     simple "flex:0 0 auto" — placés côte à côte dans un flex-row, le
+     select de l'année s'étirait donc sur presque toute la largeur,
+     réduisant le numéro de RG à un filet quasi invisible tout à droite.
+     Empiler les deux, chacun sur toute la largeur, évite ce piège plutôt
+     que de rajouter une largeur figée qui casserait à nouveau sur un
+     écran étroit. */
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Année du RG"));
   var currentYear = new Date().getFullYear();
   var yearOpts = []; for(var y=currentYear-2; y<=currentYear+3; y++) yearOpts.push(y);
-  var anneeSel = h("select", {style:"flex:0 0 auto"}, yearOpts.map(function(y){
+  var anneeSel = h("select", null, yearOpts.map(function(y){
     return h("option", {value:String(y), selected: (existing ? existing.rgAnnee : String(currentYear))===String(y) ? "selected" : null}, String(y));
   }));
-  var numeroIn = h("input", {type:"text", inputmode:"numeric", maxlength:"8", placeholder:"00004587", style:"flex:1", value: existing ? existing.rgNumero : ""});
+  form.appendChild(anneeSel);
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:10px"}, "Numéro RG"));
+  var numeroIn = h("input", {type:"text", inputmode:"numeric", maxlength:"8", placeholder:"00004587", value: existing ? existing.rgNumero : ""});
   numeroIn.addEventListener("blur", function(){ numeroIn.value = padRg8(numeroIn.value); });
-  form.appendChild(h("div", {style:"display:flex; gap:8px;"}, anneeSel, numeroIn));
+  form.appendChild(numeroIn);
   form.appendChild(h("div", {class:"footnote", style:"margin-top:4px"}, "Aucun nom de partie — seul le numéro de RG identifie le dossier (les chiffres manquants sont complétés par des zéros)."));
 
   form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Rédacteur"));
@@ -13007,6 +13223,13 @@ renderers["admin-cph"] = function(root){
     h("div", {class:"rc-main"},
       h("div", {class:"rc-title"}, "Répartition par syndicat"),
       h("div", {class:"rc-sub"}, "Pourcentage d’audiences par syndicat, salariés et patronaux séparés, toutes sections du CPH")
+    ),
+    icon("ic-chev", "chev")
+  ));
+  statsPanel.appendChild(h("div", {class:"row-click", onclick:function(){ cphDeliberationsStatsState = { loading:false, data:null, cph:null }; go("cph-deliberations-stats"); }},
+    h("div", {class:"rc-main"},
+      h("div", {class:"rc-title"}, "Délibérés et rédactions"),
+      h("div", {class:"rc-sub"}, "Délibérés en attente, rédactions en attente et en retard, section par section")
     ),
     icon("ic-chev", "chev")
   ));
