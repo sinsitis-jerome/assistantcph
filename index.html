@@ -327,6 +327,11 @@
   .row-click.incomplete{ background:var(--red-glow); }
   .row-click.incomplete .rc-title{ color:var(--red); }
   .row-click.incomplete .rc-sub{ color:var(--red); }
+  /* Encart d'activité désactivé (ex. "Présider un BCO", en construction) —
+     même traitement visuel que .tool-card.disabled/.quick-link.disabled,
+     réutilisé ici pour l'accueil restructuré en listes (2026-09). */
+  .row-click.disabled{ cursor:not-allowed; opacity:.55; }
+  .row-click.disabled:active{ background:none; }
   .warn-blink{ display:inline-block; animation:blinkWarn 1s ease-in-out infinite; }
   @keyframes blinkWarn{ 0%,100%{ opacity:1; } 50%{ opacity:.25; } }
   @media (prefers-reduced-motion: reduce){ .warn-blink{ animation:none; } .sheet-btn.blink-red{ animation:none; } }
@@ -527,6 +532,7 @@
   <symbol id="ic-calendar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4M16 3v4"/></symbol>
   <symbol id="ic-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"/><path d="M7.5 8.5L12 4l4.5 4.5"/><path d="M4 15v3.5A2.5 2.5 0 006.5 21h11a2.5 2.5 0 002.5-2.5V15"/></symbol>
   <symbol id="ic-sms" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="12.5" rx="2.5"/><path d="M8 20l3.3-3h1.4"/><path d="M7.5 9h9M7.5 12.5h6"/></symbol>
+  <symbol id="ic-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8 8 0 006.3 6.3L4 8.6"/><path d="M4 4v4.6h4.6"/><path d="M4 13a8 8 0 0013.7 4.7L20 15.4"/><path d="M20 20v-4.6h-4.6"/></symbol>
 </svg>
 
 <div id="app">
@@ -6528,6 +6534,14 @@ renderers["annuaire-cph"] = function(root){
   }
 };
 
+/* Fait clignoter le raccourci "Synchroniser" de l'accueil (voir plus bas)
+   dès l'ouverture de l'application et jusqu'au premier clic dessus —
+   demande explicite de l'utilisateur. Volontairement PAS dans `state`
+   (jamais persisté ni synchronisé) : un simple rechargement de page doit
+   suffire à le faire réapparaître, exactement comme "dès qu'on ouvre
+   l'appli" le suggère, sans navigation exceptionnelle ni geste caché pour
+   le réarmer. */
+var homeSyncPending = true;
 renderers.home = function(root){
   var wrap = h("div", {class:"home-wrap"});
   var watermark = h("div", {class:"home-watermark", "aria-hidden":"true"});
@@ -6626,14 +6640,9 @@ renderers.home = function(root){
       activeFunctionLabels.length ? "Fonctions reconnues sur cet appareil : "+activeFunctionLabels.join(" · ") : "Aucune fonction particulière reconnue sur cet appareil.")
   ));
 
-  function quickLink(icon_id, label, href){
-    return h("a", {href:href, target:"_blank", rel:"noopener", class:"quick-link"},
-      h("div", {class:"ic"}, icon(icon_id)),
-      h("div", {class:"lbl"}, label)
-    );
-  }
-  function quickLinkAction(icon_id, label, onClick, disabled){
-    if(disabled){
+  function quickLinkAction(icon_id, label, onClick, opts){
+    opts = opts || {};
+    if(opts.disabled){
       return h("div", {class:"quick-link disabled", "aria-disabled":"true"},
         h("div", {class:"ic"}, icon(icon_id)),
         h("div", {class:"lbl"}, label)
@@ -6641,13 +6650,30 @@ renderers.home = function(root){
     }
     return h("div", {class:"quick-link", onclick:onClick, tabindex:"0",
         onkeydown:function(e){ if(e.key==="Enter") onClick(); }},
-      h("div", {class:"ic"}, icon(icon_id)),
+      h("div", {class:"ic"+(opts.pulse ? " warn-blink" : "")}, icon(icon_id)),
       h("div", {class:"lbl"}, label)
     );
   }
+  /* Les 4 raccourcis d'accueil (revue UI, 2026-09) : Synchroniser (nouveau),
+     Annuaire, Planning, Statistiques — « Site web » en est retiré (déplacé
+     dans « Mes activités » ci-dessous, à côté de « Liens utiles »).
+     « Synchroniser » clignote (même style que .warn-blink) dès l'ouverture
+     de l'application et jusqu'au premier clic dessus (homeSyncPending,
+     remis à true par un simple rechargement de page — jamais persisté :
+     demande explicite de l'utilisateur, « clignote dès qu'on ouvre l'appli
+     jusqu'à ce qu'on clique dessus »), sans dépendre du résultat de la
+     récupération elle-même (déjà automatique et silencieuse par ailleurs,
+     voir maybeAutoPullSection) — un simple geste rassurant, pas une
+     obligation fonctionnelle. Réutilise confirmAndPullSection, déjà en
+     place en Réglages (« Forcer une vérification maintenant »), plutôt que
+     de dupliquer la logique de récupération manuelle. */
   var quickLinks = h("div", {class:"quick-links"},
+    quickLinkAction("ic-sync", "Synchroniser", function(){
+      homeSyncPending = false;
+      render("home");
+      confirmAndPullSection("home");
+    }, {pulse: homeSyncPending}),
     quickLinkAction("ic-users", "Annuaire", function(){ go("annuaire-cph"); }),
-    sectionLink("cphWebUrl") ? quickLink("ic-globe", "Site web", sectionLink("cphWebUrl")) : null,
     quickLinkAction("ic-calendar", "Mon planning", function(){ go("mon-planning"); }),
     /* Réactivé (chantier statistiques, 2026-09) : la moyenne d'audiences par
        conseiller (sectionAverageAudiencesPerConseiller) avait été signalée
@@ -6663,46 +6689,100 @@ renderers.home = function(root){
   );
   wrap.appendChild(quickLinks);
 
-  function card(icon_id, title, desc, screenId, badge, wide, disabled){
-    if(disabled){
-      return h("div", {class:"tool-card"+(wide?" wide":"")+" disabled", "aria-disabled":"true"},
-        badge,
-        h("div", {class:"ic"}, icon(icon_id)),
-        h("div", null, h("div", {class:"t"}, title), h("div", {class:"d"}, desc))
-      );
-    }
-    return h("div", {class:"tool-card"+(wide?" wide":""), onclick:function(){ go(screenId); }, tabindex:"0",
+  /* Refonte de l'accueil (revue UI, 2026-09) : les cartes-icônes en grille
+     (card-grid/tool-card) cèdent la place à de simples encarts horizontaux
+     empilés (row-click, comme au bas de « Section administrée » /
+     « Administrer le CPH » — voir sectionCard), regroupés sous trois
+     titres. « Mes activités » reste toujours visible ; « Ma section » et
+     « Mon CPH » n'apparaissent que si au moins une de leurs lignes
+     s'applique à la personne connectée. */
+  function activityRow(icon_id, title, sub, screenId, trailing){
+    if(trailing===undefined) trailing = icon("ic-chev", "chev");
+    return h("div", {class:"row-click", tabindex:"0", onclick:function(){ go(screenId); },
         onkeydown:function(e){ if(e.key==="Enter") go(screenId); }},
-      badge,
       h("div", {class:"ic"}, icon(icon_id)),
-      h("div", null, h("div", {class:"t"}, title), h("div", {class:"d"}, desc))
+      h("div", {class:"rc-main"}, h("div", {class:"rc-title"}, title), h("div", {class:"rc-sub"}, sub)),
+      trailing
+    );
+  }
+  function activityRowDisabled(icon_id, title, sub, badge){
+    return h("div", {class:"row-click disabled", "aria-disabled":"true"},
+      h("div", {class:"ic"}, icon(icon_id)),
+      h("div", {class:"rc-main"}, h("div", {class:"rc-title"}, title), h("div", {class:"rc-sub"}, sub)),
+      badge
+    );
+  }
+  function activityLinkRow(icon_id, title, sub, href){
+    return h("a", {class:"row-click", href:href, target:"_blank", rel:"noopener", style:"text-decoration:none;color:var(--text);"},
+      h("div", {class:"ic"}, icon(icon_id)),
+      h("div", {class:"rc-main"}, h("div", {class:"rc-title"}, title), h("div", {class:"rc-sub"}, sub)),
+      icon("ic-chev", "chev")
     );
   }
 
-  var grid = h("div", {class:"card-grid"},
-    card("ic-clock", "Feuille de vacation", "Saisir vos vacations et générer le relevé du mois (RITA)", "vacations"),
-    card("ic-scale", "Présider un BJ", "Le fil rouge complet, étape par étape", "bj"),
-    card("ic-handshake", "Présider un BCO", "Rubrique en construction", "bco", h("span",{class:"badge amber"},"Bientôt"), false, true),
-    card("ic-book", "Textes de référence", "Articles cités, recherche rapide", "refs"),
-    card("ic-quote", "Phrases rituelles", "Les formules fréquentes en audience", "phrases", null, true),
-    (state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president") ? card("ic-users", "Administrer ma section", "Outils présidence de section", "admin-section", null, true) : null,
-    /* Réservée au/à la référiste désigné(e) "Responsable des référés" par
-       l'administrateur (voir isRefereResponsable, module PLANNING DES
-       RÉFÉRÉS — CÔTÉ RESPONSABLE) — jamais visible pour un(e) simple
-       référiste, qui ne fait que consulter ses propres audiences dans
-       « Mon planning » (étape 2). */
-    isRefereResponsable() ? card("ic-scale", "Gérer le planning des référés", "Créer et modifier les audiences de référé", "referes-planification", null, true) : null,
-    /* Réservée à LA personne désignée administrateur (voir isDesignatedAdmin) —
-       plus jamais conditionnée sur cphRole==="president" : être président(e)
-       du CPH et être l'administrateur de l'application sont désormais deux
-       fonctions bien distinctes (voir échange avec l'utilisateur, « quelque
-       soit ses titres ou fonction »), qui peuvent ou non coïncider selon qui
-       est désigné. */
-    isDesignatedAdmin() ? card("ic-building", "Administrer le CPH", "Pilotage et organisation du conseil", "admin-cph", null, true) : null,
-    card("ic-globe", "Liens utiles", "Site web, annuaire, Formation ENM, Légifrance, ENSAP", "liens-utiles", null, true)
-  );
-  wrap.appendChild(grid);
+  /* Conteneur unique pour les trois blocs ci-dessous, positionné comme
+     .quick-links/.card-grid l'étaient (position:relative;z-index:1) pour
+     rester peint au-dessus du filigrane (.home-watermark, position:fixed,
+     z-index:0) exactement comme avant cette refonte. */
+  var activityWrap = h("div", {style:"position:relative;z-index:1;"});
 
+  activityWrap.appendChild(h("div", {class:"section-title"}, "Mes activités"));
+  var actPanel = h("div", {class:"panel"});
+  actPanel.appendChild(activityRow("ic-clock", "Mes vacations", "Saisir vos vacations et générer le relevé du mois (RITA)", "vacations"));
+  actPanel.appendChild(activityRow("ic-calendar", "Mon planning", "Consulter vos audiences prévues, demander un échange", "mon-planning"));
+  actPanel.appendChild(activityRow("ic-copy", "Mes dossiers", "Dossiers de délibéré dont vous êtes le rédacteur ou la rédactrice", "mes-redactions"));
+  actPanel.appendChild(activityRow("ic-scale", "Présider un BJ", "Le fil rouge complet, étape par étape", "bj"));
+  actPanel.appendChild(activityRowDisabled("ic-handshake", "Présider un BCO", "Rubrique en construction", h("span",{class:"badge amber", style:"flex:none"},"Bientôt")));
+  actPanel.appendChild(activityRow("ic-quote", "Phrases rituelles", "Les formules fréquentes en audience", "phrases"));
+  actPanel.appendChild(activityRow("ic-book", "Textes de référence", "Articles cités, recherche rapide", "refs"));
+  if(sectionLink("cphWebUrl")){
+    actPanel.appendChild(activityLinkRow("ic-globe", "Site web", sectionLink("cphWebUrl"), sectionLink("cphWebUrl")));
+  }
+  actPanel.appendChild(activityRow("ic-globe", "Liens utiles", "Annuaire, Formation ENM, Légifrance, ENSAP", "liens-utiles"));
+  activityWrap.appendChild(actPanel);
+
+  /* « Ma section » : chaque ligne garde sa propre condition (présidence de
+     section pour l'une, responsable des référés pour l'autre — les deux
+     ne coïncident pas forcément), le titre et le panneau n'apparaissant
+     que si au moins une s'applique. */
+  var sectionRows = [];
+  if(state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president"){
+    sectionRows.push(activityRow("ic-users", "Administrer ma section", "Outils présidence de section", "admin-section"));
+  }
+  /* Réservée au/à la référiste désigné(e) "Responsable des référés" par
+     l'administrateur (voir isRefereResponsable, module PLANNING DES
+     RÉFÉRÉS — CÔTÉ RESPONSABLE) — jamais visible pour un(e) simple
+     référiste, qui ne fait que consulter ses propres audiences dans
+     « Mon planning » (étape 2). */
+  if(isRefereResponsable()){
+    sectionRows.push(activityRow("ic-scale", "Gérer le planning des référés", "Créer et modifier les audiences de référé", "referes-planification"));
+  }
+  if(sectionRows.length){
+    activityWrap.appendChild(h("div", {class:"section-title", style:"margin-top:20px;"}, "Ma section"));
+    var secPanel = h("div", {class:"panel"});
+    sectionRows.forEach(function(r){ secPanel.appendChild(r); });
+    activityWrap.appendChild(secPanel);
+  }
+
+  /* « Mon CPH » : visible pour tout président/vice-président du CPH
+     (isCphOfficer(cphRole) — demande explicite de l'utilisateur, 2026-09),
+     UNI à isDesignatedAdmin() pour ne jamais faire perdre l'accès à la
+     personne déjà désignée administrateur si son propre profil ne porte
+     pas ce cphRole (ces deux fonctions restent distinctes, voir plus haut
+     et l'échange sur « quelque soit ses titres ou fonction »). Le clic
+     lui-même reste soumis à la garde propre à renderers["admin-cph"]
+     (isDesignatedAdmin, code à 8 chiffres) : un président/vice-président
+     du CPH non désigné administrateur voit donc désormais l'entrée, mais
+     tombera sur le bandeau "Bientôt disponible" tant qu'il n'est pas aussi
+     l'administrateur désigné. */
+  if(isCphOfficer(state.profile.cphRole) || isDesignatedAdmin()){
+    activityWrap.appendChild(h("div", {class:"section-title", style:"margin-top:20px;"}, "Mon CPH"));
+    var cphPanel = h("div", {class:"panel"});
+    cphPanel.appendChild(activityRow("ic-building", "Administrer mon CPH", "Pilotage et organisation du conseil", "admin-cph"));
+    activityWrap.appendChild(cphPanel);
+  }
+
+  wrap.appendChild(activityWrap);
   root.appendChild(wrap);
 };
 
