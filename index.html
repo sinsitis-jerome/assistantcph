@@ -588,6 +588,21 @@ var NATURES = [
     alwaysAlert:"Attention, activité réservée au Président de Formation de l’audience à venir."},
   {id:"conseiller-rapporteur", label:"Conseiller rapporteur"}
 ];
+/* Doit être calculé ICI, juste après NATURES, et surtout AVANT migrate()/
+   loadState() (voir plus bas, "var state = loadState();") : ce module
+   délibéré est référencé par sanitizeDeliberationEntry, qui est appelée
+   dès le tout premier chargement de l'application pour traiter
+   state.deliberations persisté d'une session précédente. Un ancien
+   emplacement plus bas dans le fichier (juste avant le module DÉLIBÉRÉS ET
+   RÉDACTIONS) laissait cette variable "var" déclarée mais encore
+   `undefined` au moment de ce tout premier chargement (le "var" est
+   remonté, pas son initialisation) dès qu'un dossier en délibéré existait
+   déjà sur l'appareil : sanitizeDeliberationEntry plantait alors sur
+   REDACTION_NATURE_IDS.indexOf(...), migrate() tout entier échouait, et
+   loadState() retombait silencieusement sur clone(DEFAULT_STATE) — un
+   appareil ayant déjà synchronisé au moins un dossier perdait donc tout
+   son profil et toute sa section à la réouverture suivante de l'application. */
+var REDACTION_NATURE_IDS = NATURES.filter(function(n){ return n.isRedaction; }).map(function(n){ return n.id; });
 
 var SECTIONS = ["Encadrement","Industrie","Commerce","Agriculture","Activités diverses"];
 var DEP_OPTIONS = [ {value:"domicile", label:"Domicile"}, {value:"entreprise", label:"Entreprise"}, {value:"sans_objet", label:"Sans objet"} ];
@@ -1158,6 +1173,12 @@ var DEFAULT_STATE = {
     legifranceUrl:"https://www.legifrance.gouv.fr/",
     ensapUrl:"https://ensap.gouv.fr/web/accueilnonconnecte",
     ritaReminders:false,
+    /* Rappel de rédaction en délibéré (voir module DÉLIBÉRÉS ET
+       RÉDACTIONS, et maybeNotifyRedactionReminder plus bas) — même
+       principe que ritaReminders ci-dessus (notification facultative,
+       avec autorisation explicite du navigateur), pour les rédactions
+       qui arrivent à échéance ou sont en retard. */
+    redactionReminders:false,
     /* Signature manuscrite (tracée au doigt/souris dans Réglages),
        enregistrée en PNG data-URL. Vide = aucune signature enregistrée.
        Apposée automatiquement, en complément de la mention de validation
@@ -1188,6 +1209,15 @@ var DEFAULT_STATE = {
      (jamais modifiables ici localement). */
   sectionSettings: defaultSectionSettings(),
   planning:[],
+  /* Suivi des dossiers en délibéré (voir échange avec l'utilisateur :
+     "aider les conseillers dans le suivi des délibérés et rédactions").
+     Un dossier par RG — plusieurs dossiers peuvent partager la même
+     audience de BJ (planningEntryId), une séance de bureau de jugement
+     traitant en général plusieurs affaires. Voir sanitizeDeliberationEntry
+     pour la forme exacte de chaque dossier, et syncPayloadFromState /
+     applySyncPayloadToState : synchronisé exactement comme sectionMembers
+     et planning, jamais disponible sans synchronisation Firebase active. */
+  deliberations:[],
   /* Vestige de l'ancien parcours guidé « Outil de planification » (partage
      JSON entre président et vice-président, envoi au greffe, diffusion à
      la section), remplacé par un simple téléchargement JPEG du planning
@@ -1452,6 +1482,7 @@ function migrate(parsed){
       s.profile.legifranceUrl = typeof p.legifranceUrl==="string" ? p.legifranceUrl : DEFAULT_STATE.profile.legifranceUrl;
       s.profile.ensapUrl = typeof p.ensapUrl==="string" ? p.ensapUrl : DEFAULT_STATE.profile.ensapUrl;
       s.profile.ritaReminders = p.ritaReminders===true;
+      s.profile.redactionReminders = p.redactionReminders===true;
       s.profile.signature = (typeof p.signature==="string" && /^data:image\/png;base64,/.test(p.signature) && p.signature.length<400000) ? p.signature : "";
       s.profile.memberId = (typeof p.memberId==="string" && p.memberId) ? p.memberId : null;
     }
@@ -1516,6 +1547,7 @@ function migrate(parsed){
         };
       }).filter(function(pl){ return pl.date; });
     }
+    s.deliberations = sanitizeDeliberationsArray(parsed.deliberations);
     s.planningFlowStep = (typeof parsed.planningFlowStep==="number" && parsed.planningFlowStep>=0 && parsed.planningFlowStep<=4) ? Math.floor(parsed.planningFlowStep) : 0;
     if(parsed.myPlanning && typeof parsed.myPlanning==="object"){
       var mp = parsed.myPlanning;
@@ -2162,7 +2194,7 @@ function sanitizeSectionSettings(raw){
    pushSectionSyncPayload, aucune fusion champ-par-champ possible sur un
    contenu chiffré en bloc). */
 function syncPayloadFromState(){
-  return { sectionMembers: state.sectionMembers, planning: state.planning, sectionSettings: state.sectionSettings };
+  return { sectionMembers: state.sectionMembers, planning: state.planning, sectionSettings: state.sectionSettings, deliberations: state.deliberations };
 }
 /* Détection du retrait d'accès (voir échange avec l'utilisateur : « lorsqu'un
    utilisateur est supprimé... il ne faut plus qu'il puisse accéder à la
@@ -2191,11 +2223,13 @@ function applySyncPayloadToState(payload){
     state.planning = [];
     state.sectionSettings = defaultSectionSettings();
     state.myPlanning = clone(DEFAULT_STATE.myPlanning);
+    state.deliberations = [];
     return;
   }
   state.sectionMembers = incomingMembers;
   state.planning = (payload && Array.isArray(payload.planning)) ? payload.planning : [];
   state.sectionSettings = sanitizeSectionSettings(payload && payload.sectionSettings);
+  state.deliberations = sanitizeDeliberationsArray(payload && payload.deliberations);
 }
 /* Valeur effective d'un lien utile : priorité à la donnée de section
    (configurée par l'administrateur, identique pour tous), repli sur
@@ -2893,7 +2927,7 @@ function openAdminCreateSectionSheet(cph, section){
         entry.pinHash = hash;
         adminMemberPins[entry.id] = pin;
         var code = generateSectionCode();
-        return pushSectionSyncPayload(code, cph, section, {sectionMembers:[entry], planning:[]}).then(function(){
+        return pushSectionSyncPayload(code, cph, section, {sectionMembers:[entry], planning:[], deliberations:[]}).then(function(){
           return registerSectionInAdminRegistry(adminSessionCode, cph, section, code);
         }).then(function(){
           var pinUpdate = {}; pinUpdate[entry.id] = pin;
@@ -2955,7 +2989,7 @@ function openAdminIndexSectionSheet(cph, section){
 
 function openAdminSection(cph, section, sectionCode){
   clearAdminAutoPush(); // n'importe quel envoi automatique programmé concernait l'ancienne section ouverte, le cas échéant
-  adminBuffer = {cph:cph, section:section, sectionCode:sectionCode, sectionMembers:[], planning:[], sectionSettings:defaultSectionSettings(), loaded:false};
+  adminBuffer = {cph:cph, section:section, sectionCode:sectionCode, sectionMembers:[], planning:[], sectionSettings:defaultSectionSettings(), deliberations:[], loaded:false};
   /* adminMemberPins n'est volontairement PAS remis à zéro ici : ouvrir une
      section fraîchement créée (openAdminSectionCreatedSheet -> "Continuer")
      appelle aussi cette fonction, et le code du président généré à
@@ -2981,6 +3015,16 @@ function refreshAdminBuffer(){
       adminBuffer.sectionMembers = (result.payload && result.payload.sectionMembers) || [];
       adminBuffer.planning = (result.payload && result.payload.planning) || [];
       adminBuffer.sectionSettings = sanitizeSectionSettings(result.payload && result.payload.sectionSettings);
+      /* Jamais édité depuis l'espace administrateur transverse (v1) — voir
+         module DÉLIBÉRÉS ET RÉDACTIONS : simplement rechargé puis réémis
+         tel quel à chaque envoi ci-dessous (pushAdminBuffer), exactement
+         comme sectionSettings déjà réémis sans modification locale. Sans
+         ce champ, N'IMPORTE QUEL envoi depuis cet espace (ajout d'un
+         conseiller, modification du planning...) écraserait purement et
+         simplement les dossiers de délibéré déjà enregistrés pour cette
+         section — pushSectionSyncPayload remplaçant le document entier,
+         jamais une fusion champ par champ (voir syncPayloadFromState). */
+      adminBuffer.deliberations = sanitizeDeliberationsArray(result.payload && result.payload.deliberations);
     }
     adminBuffer.loaded = true;
     render("sysadmin-section");
@@ -2993,7 +3037,8 @@ function refreshAdminBuffer(){
 function pushAdminBuffer(){
   if(!adminBuffer) return Promise.reject(new Error("no-admin-buffer"));
   return pushSectionSyncPayload(adminBuffer.sectionCode, adminBuffer.cph, adminBuffer.section, {
-    sectionMembers: adminBuffer.sectionMembers, planning: adminBuffer.planning, sectionSettings: adminBuffer.sectionSettings
+    sectionMembers: adminBuffer.sectionMembers, planning: adminBuffer.planning, sectionSettings: adminBuffer.sectionSettings,
+    deliberations: adminBuffer.deliberations
   });
 }
 
@@ -4241,7 +4286,9 @@ var SCREEN_TITLES = {
   "referes-planification":"Planning des référés",
   "sysadmin-referes-planning":"Planning des référés",
   "section-audience-ranking":"Classement de la section",
-  "cph-syndicat-stats":"Répartition par syndicat"
+  "cph-syndicat-stats":"Répartition par syndicat",
+  "mes-redactions":"Mes rédactions à faire", "deliberations-section":"Délibérés et rédactions",
+  "sysadmin-deliberations":"Délibérés et rédactions"
 };
 /* Écrans du parcours d'accueil : ni bouton retour ni icône Réglages tant
    qu'on y est (voir render() plus bas) — un conseiller ne doit pas
@@ -5009,6 +5056,8 @@ renderers["sysadmin-section"] = function(root){
   }
   cardsPanel.appendChild(sectionCard("ic-users", "Liste de la section", adminBuffer.sectionMembers.length ? (adminBuffer.sectionMembers.length+(adminBuffer.sectionMembers.length>1 ? " conseillers enregistrés" : " conseiller enregistré")) : "Aucun conseiller enregistré", "sysadmin-section-members"));
   cardsPanel.appendChild(sectionCard("ic-calendar", "Planning de la section", adminBuffer.planning.length ? (adminBuffer.planning.length+(adminBuffer.planning.length>1 ? " dates enregistrées" : " date enregistrée")) : "Aucune date enregistrée", "sysadmin-section-planning"));
+  var sysDelibPending = (adminBuffer.deliberations||[]).filter(function(d){ return !d.remis; }).length;
+  cardsPanel.appendChild(sectionCard("ic-scale", "Délibérés et rédactions", (adminBuffer.deliberations||[]).length ? (sysDelibPending+(sysDelibPending>1 ? " rédactions en attente" : " rédaction en attente")+" sur "+adminBuffer.deliberations.length) : "Aucun dossier enregistré pour l’instant", "sysadmin-deliberations"));
   cardsPanel.appendChild(sectionCard("ic-gear", "Paramètres de la section", "Liens utiles, horaires par défaut, contacts", "sysadmin-section-settings"));
   cardsPanel.appendChild(sectionCard("ic-building", "Greffiers du CPH", (adminBuffer.sectionSettings.cphGreffiers||[]).length ? ((adminBuffer.sectionSettings.cphGreffiers||[]).length+((adminBuffer.sectionSettings.cphGreffiers||[]).length>1 ? " greffiers enregistrés" : " greffier enregistré")) : "Aucun greffier enregistré", "sysadmin-cph-greffiers"));
   /* Pas un simple sectionCard(...) : contrairement aux trois cartes
@@ -5050,6 +5099,49 @@ renderers["sysadmin-section"] = function(root){
     adminBuffer = null; clearAdminAutoPush(); go("sysadmin-panel", true);
   }}, "Changer de section"));
   root.appendChild(actions);
+};
+
+/* Vue de pilotage de TOUS les dossiers en délibéré de la section
+   actuellement ouverte dans l'espace administrateur transverse — pendant
+   de renderers["deliberations-section"] (côté state) sur adminBuffer.
+   Comme là-bas, la création reste rattachée à son audience de BJ (voir
+   "Dossiers en délibéré" dans openAdminAudienceForm) : cet écran sert à
+   repérer d'un coup d'œil ce qui est en retard ou approche de l'échéance,
+   pas à dupliquer ce point d'entrée. */
+renderers["sysadmin-deliberations"] = function(root){
+  if(!requireAdminBuffer(root)) return;
+  if(!adminBuffer.loaded){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des données de la section…")));
+    return;
+  }
+  root.appendChild(h("p", {class:"lede"}, "Tous les dossiers en délibéré de "+adminBuffer.section+" ("+adminBuffer.cph+"), triés par échéance de remise."));
+
+  var all = (adminBuffer.deliberations||[]).slice().sort(function(a,b){
+    var ra = deliberationRemiseDate(a), rb = deliberationRemiseDate(b);
+    return ra<rb ? -1 : ra>rb ? 1 : 0;
+  });
+  var panel = h("div", {class:"panel"});
+  if(!all.length){
+    panel.appendChild(h("p", {class:"lede", style:"margin:0"}, "Aucun dossier enregistré pour l’instant — ajoutez-en un depuis le détail d’une audience de BJ, dans « Planning de la section »."));
+  } else {
+    var today = todayISO();
+    all.forEach(function(d){
+      var redacteur = (adminBuffer.sectionMembers||[]).filter(function(m){ return m.id===d.redacteurId; })[0];
+      var remise = deliberationRemiseDate(d);
+      var late = !d.remis && remise && remise<today;
+      var statusTxt = d.remis ? "Remis" : (late ? "En retard (remise le "+planningDateLabel(remise)+")" : "À remettre le "+planningDateLabel(remise));
+      panel.appendChild(h("div", {class:"row-click"+(late ? " incomplete" : ""), onclick:function(){ openSysadminDeliberationEntryDetail(d.id, "sysadmin-deliberations"); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, (late ? "⚠ " : "")+"RG "+rgLabel(d)),
+          h("div", {class:"rc-sub"}, natureLabel(d.natureId)+" · "+(redacteur ? memberDisplayName(redacteur) : "(rédacteur supprimé)")+" · "+statusTxt)
+        ),
+        icon("ic-chev", "chev")
+      ));
+    });
+  }
+  root.appendChild(panel);
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:12px"}, "Pour ajouter un dossier, ouvrez l’audience de BJ concernée depuis « Planning de la section »."));
+  root.appendChild(adminSectionSaveReminder());
 };
 
 /* =================================================================
@@ -5519,8 +5611,9 @@ function activateCphDirectory(){
         var planning = Array.isArray(payload.planning) ? payload.planning : [];
         var settings = sanitizeSectionSettings(payload.sectionSettings);
         settings.cphDirectoryCode = code;
+        var deliberations = Array.isArray(payload.deliberations) ? payload.deliberations : [];
         return pushSectionSyncPayload(sectionCode, cph, sectionName, {
-          sectionMembers: members, planning: planning, sectionSettings: settings
+          sectionMembers: members, planning: planning, sectionSettings: settings, deliberations: deliberations
         }).then(function(){
           return publishCphDirectoryEntry(cph, sectionName, code, members);
         });
@@ -6049,8 +6142,9 @@ function propagateSectionSettingsPatchToAllSections(cph, patchSettings, onDone){
         var planning = Array.isArray(payload.planning) ? payload.planning : [];
         var settings = sanitizeSectionSettings(payload.sectionSettings);
         patchSettings(settings);
+        var deliberations = Array.isArray(payload.deliberations) ? payload.deliberations : [];
         return pushSectionSyncPayload(sectionCode, cph, sectionName, {
-          sectionMembers: members, planning: planning, sectionSettings: settings
+          sectionMembers: members, planning: planning, sectionSettings: settings, deliberations: deliberations
         });
       }).then(function(){
         okCount++; settle();
@@ -6457,7 +6551,30 @@ renderers.home = function(root){
       "Il ne reste que quelques heures pour envoyer votre relevé RITA de "+monthLabel(reminderMKey).toLowerCase()+" si ce n’est pas déjà fait. Touchez pour y accéder."
     ));
   }
+
+  /* Rappel des rédactions à remettre (voir module DÉLIBÉRÉS ET RÉDACTIONS)
+     — même emplacement et même logique de bannière que le rappel RITA
+     ci-dessus, mais sans notification système dédiée pour l'instant (la
+     bannière suffit tant que l'application est ouverte au moins une fois
+     dans la semaine qui précède l'échéance). */
+  var pendingRedactions = myPendingRedactions().filter(function(d){ return !d.remis; });
+  var soonThreshold = addDaysISO(todayISO(), 7);
+  var dueRedactions = pendingRedactions.filter(function(d){
+    var remise = deliberationRemiseDate(d);
+    return !remise || remise<=soonThreshold;
+  });
+  if(dueRedactions.length){
+    var overdueCount = dueRedactions.filter(function(d){ var r = deliberationRemiseDate(d); return r && r<todayISO(); }).length;
+    var redactionMsg = overdueCount
+      ? (overdueCount>1 ? overdueCount+" rédactions sont en retard." : "Une rédaction est en retard.")
+      : (dueRedactions.length>1 ? dueRedactions.length+" rédactions sont à remettre dans les prochains jours." : "Une rédaction est à remettre dans les prochains jours.");
+    wrap.appendChild(h("div", {class:"banner red", style:"cursor:pointer;", onclick:function(){ go("mes-redactions"); }},
+      h("b", null, "✍️ "), redactionMsg+" Touchez pour y accéder."
+    ));
+  }
+
   maybeNotifyRitaReminder();
+  maybeNotifyRedactionReminder();
   maybeRunAutoBackup();
 
   if(shouldShowInstallBanner()){
@@ -6662,7 +6779,253 @@ function myInvolvedPlanningEntries(){
   return out;
 }
 
-var REDACTION_NATURE_IDS = NATURES.filter(function(n){ return n.isRedaction; }).map(function(n){ return n.id; });
+/* =================================================================
+   MODULE — DÉLIBÉRÉS ET RÉDACTIONS
+   ------------------------------------------------------------------
+   Demande de l'utilisateur : suivre, pour chaque dossier plaidé en BJ,
+   les quatre dates qui rythment le délibéré (date du BJ, date du
+   délibéré — fixée librement entre les conseillers à l'issue de
+   l'audience, toujours comprise entre le BJ et la date de remise —,
+   date de prononcé, et date de remise de la rédaction, calculée
+   automatiquement à J-7 du prononcé et jamais saisie à la main).
+
+   Aucun nom de partie dans l'application : seul le numéro de RG
+   identifie un dossier (rgAnnee sur 4 chiffres + rgNumero sur 8
+   chiffres, complété à gauche par des zéros — voir padRg8/rgLabel).
+
+   Une audience de BJ peut porter PLUSIEURS dossiers (une séance de
+   bureau de jugement traite en général plusieurs affaires) : chaque
+   dossier référence donc l'audience via planningEntryId plutôt que
+   l'inverse. Ce champ pointe toujours vers l'ENREGISTREMENT du côté qui
+   préside réellement l'audience (state.planning[i] où college===
+   presidence) — c'est cet enregistrement, et lui seul, qui porte le
+   véritable "président de cette audience", au même titre que pour le
+   module ÉCHANGE (voir findOwnPlanningEntryFor). Les assesseurs des DEUX
+   collèges (voir mergedRecordFromGroup) complètent la formation.
+
+   Droits (voir échange avec l'utilisateur) : la création et la
+   modification d'un dossier reviennent exclusivement au président de
+   CETTE audience précise, au président/vice-président de la section, ou
+   à l'administrateur désigné (isDesignatedAdmin) — voir
+   canManageDeliberationFor. Le rédacteur désigné, lui, peut seulement
+   déclarer sa rédaction remise (markDeliberationRemis) ; les autres
+   membres de la formation n'ont qu'un accès en lecture (voir
+   openDeliberationEntryDetail). Synchronisé exactement comme
+   sectionMembers/planning (voir syncPayloadFromState/
+   applySyncPayloadToState) : indisponible sans synchronisation Firebase
+   active, comme le module ÉCHANGE. */
+
+/* Complète un numéro saisi (ex. "4587") à gauche par des zéros pour
+   obtenir exactement 8 chiffres ("00004587") — règle imposée par
+   l'utilisateur. Ne garde que les chiffres, et se limite aux 8 derniers
+   si jamais l'utilisateur en saisit davantage (garde-fou : ne devrait
+   pas arriver, le champ étant limité à 8 caractères). */
+function padRg8(raw){
+  var digits = String(raw==null ? "" : raw).replace(/\D/g, "");
+  if(!digits) return "";
+  digits = digits.slice(-8);
+  while(digits.length<8) digits = "0"+digits;
+  return digits;
+}
+function rgLabel(d){ return (d && d.rgAnnee ? d.rgAnnee : "")+"-"+(d && d.rgNumero ? d.rgNumero : ""); }
+
+/* Ajoute (ou retranche, n négatif) n jours à une date "YYYY-MM-DD" —
+   construction en heure locale (comme todayISO) pour éviter tout
+   décalage de fuseau horaire. */
+function addDaysISO(dateStr, n){
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr||"");
+  if(!m) return "";
+  var dt = new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
+  dt.setDate(dt.getDate()+n);
+  return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0");
+}
+/* Date de remise de la rédaction : toujours calculée, jamais saisie —
+   J-7 par rapport à la date de prononcé retenue avec le greffe. */
+function deliberationRemiseDate(d){ return (d && d.datePrononce) ? addDaysISO(d.datePrononce, -7) : ""; }
+
+function sanitizeDeliberationEntry(raw){
+  if(!raw || typeof raw!=="object") return null;
+  var dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  var out = {
+    id: (typeof raw.id==="string" && raw.id) ? raw.id : uid(),
+    planningEntryId: (typeof raw.planningEntryId==="string" && raw.planningEntryId) ? raw.planningEntryId : "",
+    natureId: REDACTION_NATURE_IDS.indexOf(raw.natureId)!==-1 ? raw.natureId : REDACTION_NATURE_IDS[0],
+    rgAnnee: /^\d{4}$/.test(raw.rgAnnee) ? raw.rgAnnee : "",
+    rgNumero: /^\d{8}$/.test(raw.rgNumero) ? raw.rgNumero : "",
+    dateDelibere: dateRe.test(raw.dateDelibere) ? raw.dateDelibere : "",
+    datePrononce: dateRe.test(raw.datePrononce) ? raw.datePrononce : "",
+    redacteurId: (typeof raw.redacteurId==="string" && raw.redacteurId) ? raw.redacteurId : "",
+    remis: raw.remis===true,
+    remisAt: typeof raw.remisAt==="string" ? raw.remisAt : null,
+    createdAt: typeof raw.createdAt==="string" ? raw.createdAt : new Date().toISOString(),
+    updatedAt: typeof raw.updatedAt==="string" ? raw.updatedAt : new Date().toISOString()
+  };
+  if(!out.planningEntryId || !out.rgAnnee || !out.rgNumero || !out.dateDelibere || !out.datePrononce || !out.redacteurId) return null;
+  return out;
+}
+function sanitizeDeliberationsArray(raw){
+  return Array.isArray(raw) ? raw.map(sanitizeDeliberationEntry).filter(Boolean) : [];
+}
+
+function planningRecordById(id){
+  if(!id) return null;
+  return (state.planning||[]).filter(function(p){ return p.id===id; })[0] || null;
+}
+/* La "formation" (président + tous les assesseurs, deux collèges réunis)
+   de l'audience portée par un dossier — voir groupPlanningByAudience/
+   mergedRecordFromGroup, déjà utilisés par l'outil de planification pour
+   la même fusion. null si l'enregistrement d'origine a disparu (audience
+   supprimée après coup). */
+function formationForPlanningRecordId(id){
+  var rec = planningRecordById(id);
+  if(!rec) return null;
+  var group = groupPlanningByAudience(state.planning.filter(function(p){
+    return p.date===rec.date && p.type===rec.type;
+  }))[0];
+  if(!group) return null;
+  return { date: rec.date, type: group.type, presidence: group.presidence, merged: mergedRecordFromGroup(group) };
+}
+/* Membres réels (jamais "Autre section") de la formation d'un dossier,
+   utilisables comme rédacteur — un rédacteur doit pouvoir se connecter
+   lui-même pour déclarer sa rédaction remise, ce qu'une simple mention
+   "Autre section" ne permet pas. */
+function deliberationFormationMembers(planningEntryId){
+  var formation = formationForPlanningRecordId(planningEntryId);
+  if(!formation) return [];
+  var ids = [formation.merged.president].concat(formation.merged.assesseurs||[])
+    .filter(function(id){ return id && id!==OTHER_SECTION_ID && id!=="__self__"; });
+  var seen = {};
+  return ids.map(function(id){
+    if(seen[id]) return null; seen[id] = true;
+    return state.sectionMembers.filter(function(m){ return m.id===id; })[0] || null;
+  }).filter(Boolean);
+}
+/* Droits de création/modification d'un dossier (voir commentaire du
+   module) : le président de CETTE audience précise, le président ou
+   vice-président de la SECTION, ou l'administrateur désigné. */
+function canManageDeliberationFor(planningEntryId){
+  var rec = planningRecordById(planningEntryId);
+  if(!rec) return false;
+  if(isSelfMemberId(rec.president)) return true;
+  if(state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president") return true;
+  if(isDesignatedAdmin()) return true;
+  return false;
+}
+function deliberationsForPlanningEntry(planningEntryId){
+  return (state.deliberations||[]).filter(function(d){ return d.planningEntryId===planningEntryId; })
+    .sort(function(a,b){ return rgLabel(a).localeCompare(rgLabel(b), "fr"); });
+}
+function natureLabel(natureId){
+  var n = NATURES.filter(function(x){ return x.id===natureId; })[0];
+  return n ? n.label : "Rédaction";
+}
+/* Sauvegarde + envoi immédiat à la section — même schéma que
+   performExchange/performReplacement (module ÉCHANGE) : jamais perdu en
+   cas d'échec réseau (reste appliqué localement), avec bouton "Réessayer"
+   dédié plutôt qu'un simple renvoi vers Réglages, accessible à
+   n'importe quel acteur synchronisé, pas seulement la présidence. */
+function saveAndPushDeliberations(successMsg, failureNoun){
+  saveState();
+  toast(successMsg+" — envoi à la section en cours…");
+  var cph = cphLabel(state.profile) || state.profile.cph || "";
+  var section = state.profile.section || "";
+  pushSectionSync(state.sync.sectionCode, cph, section).then(function(){
+    markSyncDone();
+    toast(successMsg+" et envoyé à la section.");
+    render(navStack[navStack.length-1]);
+  }).catch(function(){
+    render(navStack[navStack.length-1]);
+    openSheet("Envoi à la section échoué", h("div", null,
+      h("p", {class:"lede"}, failureNoun+" est bien enregistré sur cet appareil, mais l’envoi à la section a échoué — vérifiez votre connexion."),
+      h("button", {class:"sheet-btn accent", onclick:function(){
+        pushSectionSync(state.sync.sectionCode, cphLabel(state.profile) || state.profile.cph || "", state.profile.section || "").then(function(){
+          markSyncDone(); closeSheet(); toast("Envoyé à la section.");
+        }).catch(function(){ toast("Échec de l’envoi — réessayez plus tard."); });
+      }}, "Réessayer l’envoi"),
+      h("button", {class:"sheet-btn ghost", onclick:closeSheet}, "Plus tard")
+    ));
+  });
+}
+function markDeliberationRemis(deliberationId){
+  var d = (state.deliberations||[]).filter(function(x){ return x.id===deliberationId; })[0];
+  if(!d) return;
+  d.remis = true;
+  d.remisAt = new Date().toISOString();
+  d.updatedAt = d.remisAt;
+  saveAndPushDeliberations("Rédaction déclarée remise", "La déclaration");
+}
+
+/* Numéro de RG classique « AA/NNNNN » (année sur 2 chiffres / numéro) ou
+   « AAAA/NNNNN », tel que saisi en texte libre sur le relevé RITA (voir
+   rgIn dans openVacationForm) — converti au même format que ce module
+   (rgAnnee-rgNumero, numéro complété à 8 chiffres par padRg8) pour repérer
+   automatiquement, si possible, le dossier concerné (voir
+   maybeOfferMarkRedactionRemis juste en dessous). null si le texte libre
+   ne suit pas ce schéma — RITA n'impose aucun format particulier pour ce
+   champ, contrairement au module délibéré. */
+function parseFreeTextRg(raw){
+  var m = /^\s*(\d{2,4})\s*[\/\-\s]\s*(\d{1,8})\s*$/.exec(String(raw||""));
+  if(!m) return null;
+  var year = m[1].length===2 ? "20"+m[1] : m[1];
+  var numero = padRg8(m[2]);
+  if(!numero) return null;
+  return year+"-"+numero;
+}
+/* Demande de l'utilisateur (« intégrer un lien automatique entre déclarer
+   une rédaction dans RITA et marquer un dossier remis ») : au moment même
+   où le conseiller déclare, dans son relevé RITA, avoir travaillé sur une
+   rédaction (nature isRedaction), lui proposer aussitôt de marquer la
+   rédaction correspondante comme remise en délibéré — plutôt que de le
+   laisser retrouver seul le dossier plus tard dans « Mes rédactions à
+   faire ».
+
+   Reste une PROPOSITION explicite, jamais un marquage automatique et
+   silencieux : la déclaration RITA (temps passé à rédiger) et la remise
+   effective de la rédaction au greffe restent deux évènements distincts,
+   que seul le conseiller peut confirmer avec certitude — écrire une
+   vacation de rédaction ne veut pas forcément dire que la rédaction est
+   terminée et remise. Si le numéro de RG saisi sur le relevé correspond à
+   un dossier en attente (voir parseFreeTextRg), ce dossier est mis en
+   avant en premier ; sinon, tous les dossiers en attente dont ce
+   conseiller est le rédacteur désigné sont proposés — une simple
+   déclaration RITA n'a pas de raison de dépendre d'un format de RG
+   particulier pour rester utile. N'apparaît que si au moins un dossier
+   est effectivement en attente (le module délibéré exige une
+   synchronisation active, voir son commentaire plus haut — sans elle,
+   state.deliberations reste toujours vide, et cette proposition ne
+   s'affiche donc jamais). */
+function maybeOfferMarkRedactionRemis(entry, natureObj){
+  if(!natureObj || !natureObj.isRedaction) return;
+  var pending = (state.deliberations||[]).filter(function(d){ return !d.remis && isSelfMemberId(d.redacteurId); });
+  if(!pending.length) return;
+  var matchLabel = parseFreeTextRg(entry.rg);
+  var matched = matchLabel ? pending.filter(function(d){ return rgLabel(d)===matchLabel; }) : [];
+  var candidates = matched.length ? matched : pending;
+
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"},
+    matched.length
+      ? "Le numéro de RG de cette vacation correspond à un dossier en délibéré encore en attente. Confirmez-vous avoir remis cette rédaction ?"
+      : "Vous avez déclaré une vacation de rédaction. Avez-vous remis l’une des rédactions suivantes, encore en attente ?"
+  ));
+  var panel = h("div", {class:"panel"});
+  candidates.forEach(function(d){
+    panel.appendChild(h("div", {class:"row-click", onclick:function(){
+      closeSheet();
+      markDeliberationRemis(d.id);
+    }},
+      h("div", {class:"rc-main"},
+        h("div", {class:"rc-title"}, "RG "+rgLabel(d)),
+        h("div", {class:"rc-sub"}, natureLabel(d.natureId)+" · Remise le "+planningDateLabel(deliberationRemiseDate(d)))
+      ),
+      h("span", {class:"chip"}, "Marquer remis")
+    ));
+  });
+  body.appendChild(panel);
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:10px", onclick:closeSheet}, "Pas maintenant"));
+
+  openSheet("Rédaction remise ?", body);
+}
 
 /* Conseillers « ordinaires » de la section pour le calcul de la moyenne
    ci-dessous : président(e) et vice-président(e) de section en sont
@@ -7408,6 +7771,42 @@ function maybeNotifyRitaReminder(){
   }catch(e){}
 }
 
+/* Même principe que maybeNotifyRitaReminder ci-dessus, pour les
+   rédactions en délibéré arrivant à échéance ou en retard (voir module
+   DÉLIBÉRÉS ET RÉDACTIONS et la bannière d'accueil, qui reste affichée
+   dans tous les cas — cette notification est un rappel EN PLUS, pas un
+   remplacement, pour les moments où l'application n'est qu'en arrière-plan
+   ou vient d'être rouverte). Ne se déclenche qu'une fois par chargement de
+   la page, et seulement si l'autorisation a déjà été explicitement
+   accordée (voir le réglage « Rappels » de renderers.settings, seul
+   endroit qui déclenche Notification.requestPermission). */
+var redactionReminderNotifiedThisLoad = false;
+function maybeNotifyRedactionReminder(){
+  if(redactionReminderNotifiedThisLoad) return;
+  if(!state.profile.redactionReminders) return;
+  if(typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  var pending = myPendingRedactions().filter(function(d){ return !d.remis; });
+  var soonThreshold = addDaysISO(todayISO(), 7);
+  var due = pending.filter(function(d){ var remise = deliberationRemiseDate(d); return !remise || remise<=soonThreshold; });
+  if(!due.length) return;
+  redactionReminderNotifiedThisLoad = true;
+  var overdueCount = due.filter(function(d){ var r = deliberationRemiseDate(d); return r && r<todayISO(); }).length;
+  var body = overdueCount
+    ? (overdueCount>1 ? overdueCount+" rédactions sont en retard." : "Une rédaction est en retard.")
+    : (due.length>1 ? due.length+" rédactions sont à remettre dans les prochains jours." : "Une rédaction est à remettre dans les prochains jours.");
+  try{
+    var n = new Notification("Rédaction à remettre", {
+      body: body,
+      tag: "redaction-reminder-"+todayISO()
+    });
+    n.onclick = function(){
+      try{ window.focus(); }catch(e){}
+      go("mes-redactions");
+      n.close();
+    };
+  }catch(e){}
+}
+
 /* Repartition d'une vacation entre temps de travail et hors temps de
    travail — même règle que l'aperçu en direct du formulaire de saisie
    (voir updateComputed ci-dessous). Trois cas, précisés par l'utilisateur
@@ -7770,6 +8169,7 @@ function openVacationForm(existing){
     vacViewMonth = monthKey(entry.date);
     saveState(); closeSheet(); render("vacations");
     toast(isEdit ? "Vacation modifiée." : "Vacation ajoutée.");
+    maybeOfferMarkRedactionRemis(entry, n);
   }}, isEdit ? "Enregistrer les modifications" : "Ajouter la vacation"));
   if(isEdit){
     actions.appendChild(h("button", {class:"sheet-btn danger", onclick:function(){
@@ -8455,10 +8855,20 @@ renderers["admin-section"] = function(root){
   ));
   root.appendChild(planningPanel);
 
+  var deliberationsPanel = h("div", {class:"panel"});
+  var pendingCount = (state.deliberations||[]).filter(function(d){ return !d.remis; }).length;
+  deliberationsPanel.appendChild(h("div", {class:"row-click", onclick:function(){ go("deliberations-section"); }},
+    h("div", {class:"rc-main"},
+      h("div", {class:"rc-title"}, "Délibérés et rédactions"),
+      h("div", {class:"rc-sub"}, (state.deliberations||[]).length ? pendingCount+(pendingCount>1 ? " rédactions en attente" : " rédaction en attente")+" sur "+state.deliberations.length : "Aucun dossier enregistré pour l’instant")
+    ),
+    icon("ic-chev", "chev")
+  ));
+  root.appendChild(deliberationsPanel);
+
   root.appendChild(h("div", {class:"section-title"}, "Pistes possibles"));
   var ideasPanel = h("div", {class:"panel"});
   [
-    {title:"Suivi des dossiers", sub:"États d’avancement, échéances de délibéré"},
     {title:"Contacts du greffe", sub:"Interlocuteurs utiles pour la section"}
   ].forEach(function(idea){
     var row = h("div", {class:"row-click"},
@@ -8475,6 +8885,47 @@ renderers["admin-section"] = function(root){
   });
   root.appendChild(ideasPanel);
   root.appendChild(h("div", {class:"footnote"}, "Dites-moi ce qui vous serait le plus utile ici — je construis ce module avec vous."));
+};
+
+/* Vue de pilotage, pour la présidence de section (et l'administrateur
+   désigné), de TOUS les dossiers en délibéré de la section — voir module
+   DÉLIBÉRÉS ET RÉDACTIONS. La création d'un dossier reste rattachée à son
+   audience de BJ (voir openAudienceDetail, dans l'outil de planification) :
+   cet écran sert avant tout à repérer d'un coup d'œil ce qui est en
+   retard ou approche de l'échéance sur l'ensemble de la section, pas à
+   dupliquer ce point d'entrée. */
+renderers["deliberations-section"] = function(root){
+  if(!(state.profile.sectionRole==="president" || state.profile.sectionRole==="vice-president" || isDesignatedAdmin())){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Cet écran est réservé au président, à la vice-présidente de section, ou à l’administrateur.")));
+    return;
+  }
+  root.appendChild(h("p", {class:"lede"}, "Tous les dossiers en délibéré de la section, triés par échéance de remise."));
+
+  var all = (state.deliberations||[]).slice().sort(function(a,b){
+    var ra = deliberationRemiseDate(a), rb = deliberationRemiseDate(b);
+    return ra<rb ? -1 : ra>rb ? 1 : 0;
+  });
+  var panel = h("div", {class:"panel"});
+  if(!all.length){
+    panel.appendChild(h("p", {class:"lede", style:"margin:0"}, "Aucun dossier enregistré pour l’instant — ajoutez-en un depuis le détail d’une audience de BJ, dans l’outil de planification."));
+  } else {
+    var today = todayISO();
+    all.forEach(function(d){
+      var redacteur = state.sectionMembers.filter(function(m){ return m.id===d.redacteurId; })[0];
+      var remise = deliberationRemiseDate(d);
+      var late = !d.remis && remise && remise<today;
+      var statusTxt = d.remis ? "Remis" : (late ? "En retard (remise le "+planningDateLabel(remise)+")" : "À remettre le "+planningDateLabel(remise));
+      panel.appendChild(h("div", {class:"row-click"+(late ? " incomplete" : ""), onclick:function(){ openDeliberationEntryDetail(d.id); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, (late ? "⚠ " : "")+"RG "+rgLabel(d)),
+          h("div", {class:"rc-sub"}, natureLabel(d.natureId)+" · "+(redacteur ? memberDisplayName(redacteur) : "(rédacteur supprimé)")+" · "+statusTxt)
+        ),
+        icon("ic-chev", "chev")
+      ));
+    });
+  }
+  root.appendChild(panel);
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:12px"}, "Pour ajouter un dossier, ouvrez l’audience de BJ concernée depuis l’outil de planification."));
 };
 
 /* =================================================================
@@ -10462,6 +10913,34 @@ function openMyPlanningExchangePicker(){
   openSheet("Effectuer un échange", body);
 }
 
+/* Dates de délibéré concernant l'utilisateur (voir module DÉLIBÉRÉS ET
+   RÉDACTIONS), à mélanger à « Mon planning » comme le sont déjà les
+   audiences de référé (source:"refere") — même principe : tous les
+   membres de la formation d'une audience de BJ (président + assesseurs
+   des deux collèges, voir mergedRecordFromGroup) sont "concernés" par la
+   date du délibéré qui y est rattachée, pas seulement le rédacteur
+   désigné. Recalculée directement depuis state.deliberations/state.planning
+   (déjà tenus à jour localement par la synchronisation), sans passer par
+   le format d'export anonymisé (sectionBroadcastPayload) : contrairement
+   à mine.entries, un dossier n'a aucune raison d'exister hors
+   synchronisation active. */
+function myDeliberationPlanningEntries(){
+  if(!state.sync.sectionCode) return [];
+  var out = [];
+  (state.deliberations||[]).forEach(function(d){
+    var formation = formationForPlanningRecordId(d.planningEntryId);
+    if(!formation) return;
+    var isPresident = isSelfMemberId(formation.merged.president);
+    var isAssesseur = (formation.merged.assesseurs||[]).some(isSelfMemberId);
+    if(!isPresident && !isAssesseur) return;
+    out.push({
+      source: "delibere", deliberationId: d.id, date: d.dateDelibere,
+      type: formation.type, college: "", role: isPresident ? "president" : "assesseur"
+    });
+  });
+  return out;
+}
+
 renderers["mon-planning"] = function(root){
   /* Quand la synchronisation Firebase est active, ce planning personnel
      se recalcule à chaque affichage depuis le planning de section déjà
@@ -10559,7 +11038,7 @@ renderers["mon-planning"] = function(root){
   }
   function renderList(){
     clear(listBox);
-    var entries = (mine.entries||[]).concat(refereEntries).filter(function(e){
+    var entries = (mine.entries||[]).concat(refereEntries).concat(myDeliberationPlanningEntries()).filter(function(e){
       return mode==="month" ? monthKey(e.date)===monthVal : e.date.slice(0,4)===String(yearVal);
     }).sort(function(a,b){ return a.date<b.date ? -1 : a.date>b.date ? 1 : 0; });
     var panel = h("div", {class:"panel"});
@@ -10568,9 +11047,17 @@ renderers["mon-planning"] = function(root){
     } else {
       entries.forEach(function(e){
         var roleTxt = e.role==="president" ? "Vous présidez" : "Vous êtes assesseur";
-        var typeTxt = e.source==="refere" ? "Référé" : planningTypeLabel(e.type);
-        var sub = roleTxt+" · "+typeTxt+" · Collège "+(e.college||"—").toLowerCase();
-        panel.appendChild(h("div", {class:"row-click", onclick:function(){ openMyPlanningEntryDetail(e); }},
+        var sub;
+        if(e.source==="delibere"){
+          sub = "Délibéré · "+roleTxt;
+        } else {
+          var typeTxt = e.source==="refere" ? "Référé" : planningTypeLabel(e.type);
+          sub = roleTxt+" · "+typeTxt+" · Collège "+(e.college||"—").toLowerCase();
+        }
+        panel.appendChild(h("div", {class:"row-click", onclick:function(){
+          if(e.source==="delibere") openDeliberationEntryDetail(e.deliberationId);
+          else openMyPlanningEntryDetail(e);
+        }},
           h("div", {class:"rc-main"},
             h("div", {class:"rc-title"}, planningDateLabel(e.date)),
             h("div", {class:"rc-sub"}, sub)
@@ -10611,6 +11098,56 @@ renderers["mon-planning"] = function(root){
      chose, contrairement à un simple export. */
   root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:16px", onclick:openMyPlanningPrintSheet}, "Imprimer mon planning"));
   root.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:8px", onclick:openMyPlanningExchangePicker}, "Effectuer un échange"));
+
+  /* Suivi des délibérés et rédactions (voir module dédié) : indisponible
+     sans synchronisation Firebase active, comme le reste de cet écran. */
+  if(syncActive){
+    root.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ go("mes-redactions"); }}, "Mes rédactions à faire"));
+  }
+};
+
+/* Dossiers dont l'utilisateur est le rédacteur désigné, triés par
+   échéance de remise croissante — voir module DÉLIBÉRÉS ET RÉDACTIONS. */
+function myPendingRedactions(){
+  return (state.deliberations||[])
+    .filter(function(d){ return isSelfMemberId(d.redacteurId); })
+    .sort(function(a,b){
+      var ra = deliberationRemiseDate(a), rb = deliberationRemiseDate(b);
+      return ra<rb ? -1 : ra>rb ? 1 : 0;
+    });
+}
+renderers["mes-redactions"] = function(root){
+  if(!state.sync.sectionCode){
+    root.appendChild(h("p", {class:"lede"}, "Le suivi des rédactions nécessite la synchronisation avec votre section."));
+    return;
+  }
+  var mine = myPendingRedactions();
+  root.appendChild(h("p", {class:"lede"}, "Dossiers dont vous êtes le rédacteur ou la rédactrice désigné(e), triés par échéance."));
+  var panel = h("div", {class:"panel"});
+  if(!mine.length){
+    panel.appendChild(h("p", {class:"lede", style:"margin:0"}, "Aucune rédaction à votre nom pour l’instant."));
+  } else {
+    var today = todayISO();
+    mine.forEach(function(d){
+      var remise = deliberationRemiseDate(d);
+      var late = !d.remis && remise && remise<today;
+      var statusTxt = d.remis ? "Remis" : (late ? "En retard" : "À faire pour le "+planningDateLabel(remise));
+      var row = h("div", {class:"panel", style:"margin-bottom:10px; padding:12px 14px;"},
+        h("div", {class:"row-click", style:"padding:0;margin:0;border:none;", onclick:function(){ openDeliberationEntryDetail(d.id); }},
+          h("div", {class:"rc-main"},
+            h("div", {class:"rc-title"}, (late ? "⚠ " : "")+"RG "+rgLabel(d)),
+            h("div", {class:"rc-sub"}, natureLabel(d.natureId)+" · "+statusTxt)
+          ),
+          icon("ic-chev", "chev")
+        )
+      );
+      if(!d.remis){
+        row.appendChild(h("button", {class:"sheet-btn accent small", style:"margin-top:10px", onclick:function(){ markDeliberationRemis(d.id); }}, "J’ai remis ma rédaction"));
+      }
+      panel.appendChild(row);
+    });
+  }
+  root.appendChild(panel);
 };
 
 /* Sheet « Aller à un mois » de l'outil de planification : les flèches
@@ -10851,6 +11388,39 @@ function openAudienceDetail(group, opts){
     body.appendChild(h("p", {class:"footnote", style:"margin-top:8px;color:var(--red)"}, "⚠ Audience incomplète — il manque au moins un conseiller."));
   }
 
+  /* Dossiers en délibéré rattachés à cette audience (voir module DÉLIBÉRÉS
+     ET RÉDACTIONS) : une audience de BJ peut en porter plusieurs. Rattachés
+     à l'enregistrement du côté qui préside réellement (seul à porter le
+     véritable "président de cette audience", voir canManageDeliberationFor)
+     — indisponible tant que ce président n'est pas renseigné. */
+  if(group.type==="bj"){
+    var presidingRec = group.byCollege[group.presidence] || null;
+    body.appendChild(h("div", {class:"section-title", style:"font-size:.9rem; margin-top:18px;"}, "Dossiers en délibéré"));
+    if(!presidingRec || !presidingRec.president){
+      body.appendChild(h("p", {class:"footnote"}, "Complétez d’abord le président de cette audience pour pouvoir y rattacher un dossier."));
+    } else {
+      var dossiers = deliberationsForPlanningEntry(presidingRec.id);
+      var dPanel = h("div", {class:"panel"});
+      if(!dossiers.length){
+        dPanel.appendChild(h("p", {class:"lede", style:"margin:0"}, "Aucun dossier enregistré pour cette audience."));
+      } else {
+        dossiers.forEach(function(d){
+          dPanel.appendChild(h("div", {class:"row-click", onclick:function(){ closeSheet(); openDeliberationEntryDetail(d.id); }},
+            h("div", {class:"rc-main"},
+              h("div", {class:"rc-title"}, "RG "+rgLabel(d)),
+              h("div", {class:"rc-sub"}, natureLabel(d.natureId)+" · "+(d.remis ? "Remis" : "Remise le "+planningDateLabel(deliberationRemiseDate(d))))
+            ),
+            icon("ic-chev", "chev")
+          ));
+        });
+      }
+      body.appendChild(dPanel);
+      if(canManageDeliberationFor(presidingRec.id)){
+        body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ closeSheet(); openDeliberationForm(presidingRec.id, null); }}, "+ Ajouter un dossier"));
+      }
+    }
+  }
+
   editableColleges.forEach(function(col, i){
     body.appendChild(h("button", {class:"sheet-btn "+(i===0 ? "accent" : "ghost"), style:"margin-top:10px", onclick:function(){ opts.onEdit(col); }},
       editableColleges.length>1 ? "Modifier le collège "+col : "Modifier mes conseillers ("+col+")"
@@ -10859,6 +11429,403 @@ function openAudienceDetail(group, opts){
   body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
 
   openSheet(planningDateLabel(group.date), body);
+}
+
+/* Formulaire de création/modification d'un dossier en délibéré (voir
+   module DÉLIBÉRÉS ET RÉDACTIONS) — appelant responsable de vérifier
+   canManageDeliberationFor avant d'ouvrir ce formulaire, jamais vérifié
+   ici (mêmes conventions que openPlanningForm/openAdminAudienceForm).
+   existingId null = création ; sinon modification du dossier correspondant. */
+function openDeliberationForm(planningEntryId, existingId){
+  var rec = planningRecordById(planningEntryId);
+  if(!rec){ toast("Cette audience est introuvable — actualisez depuis « Mon planning » puis réessayez."); return; }
+  var existing = existingId ? (state.deliberations||[]).filter(function(d){ return d.id===existingId; })[0] : null;
+  var formationMembers = deliberationFormationMembers(planningEntryId);
+
+  var form = h("div", null);
+  form.appendChild(h("p", {class:"lede"}, planningDateLabel(rec.date)+" — "+planningTypeLabel(rec.type)));
+
+  form.appendChild(h("label", {class:"field-label"}, "Nature"));
+  var natureSel = h("select", null, NATURES.filter(function(n){ return n.isRedaction; }).map(function(n){
+    return h("option", {value:n.id, selected: (existing ? existing.natureId : REDACTION_NATURE_IDS[0])===n.id ? "selected" : null}, n.label);
+  }));
+  form.appendChild(natureSel);
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Numéro RG"));
+  var currentYear = new Date().getFullYear();
+  var yearOpts = []; for(var y=currentYear-2; y<=currentYear+3; y++) yearOpts.push(y);
+  var anneeSel = h("select", {style:"flex:0 0 auto"}, yearOpts.map(function(y){
+    return h("option", {value:String(y), selected: (existing ? existing.rgAnnee : String(currentYear))===String(y) ? "selected" : null}, String(y));
+  }));
+  var numeroIn = h("input", {type:"text", inputmode:"numeric", maxlength:"8", placeholder:"00004587", style:"flex:1", value: existing ? existing.rgNumero : ""});
+  numeroIn.addEventListener("blur", function(){ numeroIn.value = padRg8(numeroIn.value); });
+  form.appendChild(h("div", {style:"display:flex; gap:8px;"}, anneeSel, numeroIn));
+  form.appendChild(h("div", {class:"footnote", style:"margin-top:4px"}, "Aucun nom de partie — seul le numéro de RG identifie le dossier (les chiffres manquants sont complétés par des zéros)."));
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Rédacteur"));
+  var redacteurSel = h("select", null,
+    [h("option", {value:"", selected: existing ? null : "selected"}, "— Choisir —")].concat(
+      formationMembers.map(function(m){ return h("option", {value:m.id, selected: existing && existing.redacteurId===m.id ? "selected" : null}, memberDisplayName(m)); })
+    )
+  );
+  form.appendChild(redacteurSel);
+  if(!formationMembers.length){
+    form.appendChild(h("div", {class:"footnote"}, "Aucun conseiller réel dans cette formation (uniquement « Autre section » ?) — impossible de désigner un rédacteur."));
+  }
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Date de prononcé"));
+  var prononceIn = h("input", {type:"date", value: existing ? existing.datePrononce : ""});
+  form.appendChild(prononceIn);
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Date du délibéré"));
+  var delibereIn = h("input", {type:"date", min: rec.date, value: existing ? existing.dateDelibere : ""});
+  form.appendChild(delibereIn);
+  var bornesInfo = h("div", {class:"footnote", style:"margin-top:4px"});
+  form.appendChild(bornesInfo);
+  var remiseInfo = h("div", {class:"footnote", style:"margin-top:10px"});
+  form.appendChild(remiseInfo);
+
+  function updateComputed(){
+    var remise = prononceIn.value ? deliberationRemiseDate({datePrononce:prononceIn.value}) : "";
+    delibereIn.max = remise || "";
+    bornesInfo.textContent = remise
+      ? "Le délibéré doit être fixé entre le "+planningDateLabel(rec.date)+" et le "+planningDateLabel(remise)+"."
+      : "Renseignez d’abord la date de prononcé pour borner la date du délibéré.";
+    remiseInfo.textContent = remise ? "Date de remise de la rédaction, calculée automatiquement (J-7) : "+planningDateLabel(remise)+"." : "";
+  }
+  prononceIn.addEventListener("change", updateComputed);
+  updateComputed();
+
+  var errorBox = h("div", {class:"footnote", style:"margin-top:8px;color:var(--red)"});
+  form.appendChild(errorBox);
+
+  function validationError(rgNumero){
+    if(!rgNumero || rgNumero.length!==8) return "Renseignez un numéro de RG.";
+    if(!anneeSel.value) return "Choisissez l’année du RG.";
+    if(!redacteurSel.value) return "Choisissez un rédacteur.";
+    if(!prononceIn.value) return "Renseignez la date de prononcé.";
+    if(!delibereIn.value) return "Renseignez la date du délibéré.";
+    if(delibereIn.value < rec.date) return "La date du délibéré ne peut pas être antérieure à celle du BJ.";
+    var remise = deliberationRemiseDate({datePrononce:prononceIn.value});
+    if(remise && delibereIn.value > remise) return "La date du délibéré doit être antérieure à la date de remise (prononcé − 7 jours).";
+    return null;
+  }
+
+  form.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:16px", onclick:function(){
+    var rgNumero = padRg8(numeroIn.value);
+    numeroIn.value = rgNumero;
+    var err = validationError(rgNumero);
+    if(err){ errorBox.textContent = err; return; }
+    var now = new Date().toISOString();
+    if(existing){
+      existing.natureId = natureSel.value;
+      existing.rgAnnee = anneeSel.value;
+      existing.rgNumero = rgNumero;
+      existing.redacteurId = redacteurSel.value;
+      existing.datePrononce = prononceIn.value;
+      existing.dateDelibere = delibereIn.value;
+      existing.updatedAt = now;
+    } else {
+      state.deliberations.push({
+        id: uid(), planningEntryId: planningEntryId, natureId: natureSel.value,
+        rgAnnee: anneeSel.value, rgNumero: rgNumero, redacteurId: redacteurSel.value,
+        datePrononce: prononceIn.value, dateDelibere: delibereIn.value,
+        remis:false, remisAt:null, createdAt: now, updatedAt: now
+      });
+    }
+    closeSheet();
+    saveAndPushDeliberations(existing ? "Dossier modifié" : "Dossier créé", "Le dossier");
+  }}, existing ? "Enregistrer" : "Créer le dossier"));
+
+  if(existing){
+    form.appendChild(h("button", {class:"sheet-btn danger", style:"margin-top:8px", onclick:function(){
+      openSheet("Supprimer ce dossier", h("div", null,
+        h("p", {class:"lede"}, "Le dossier RG "+rgLabel(existing)+" sera définitivement supprimé. Cette action est irréversible."),
+        h("button", {class:"sheet-btn danger", onclick:function(){
+          state.deliberations = state.deliberations.filter(function(x){ return x.id!==existing.id; });
+          closeSheet();
+          saveAndPushDeliberations("Dossier supprimé", "La suppression");
+        }}, "Supprimer définitivement"),
+        h("button", {class:"sheet-btn ghost", onclick:function(){ openDeliberationForm(planningEntryId, existing.id); }}, "Annuler")
+      ));
+    }}, "Supprimer ce dossier"));
+  }
+  form.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler"));
+
+  openSheet(existing ? "Modifier le dossier" : "Nouveau dossier de délibéré", form);
+}
+
+/* Détail (lecture seule pour l'essentiel) d'un dossier en délibéré — voir
+   module DÉLIBÉRÉS ET RÉDACTIONS. Deux actions possibles, jamais plus :
+   le rédacteur désigné peut déclarer sa rédaction remise, et qui a le
+   droit de gérer cette audience (canManageDeliberationFor) peut modifier
+   ou supprimer le dossier. Tout autre membre de la formation reste en
+   lecture seule, comme demandé par l'utilisateur. */
+function openDeliberationEntryDetail(deliberationId){
+  var d = (state.deliberations||[]).filter(function(x){ return x.id===deliberationId; })[0];
+  if(!d){ toast("Ce dossier est introuvable — actualisez depuis « Mon planning » puis réessayez."); return; }
+  var rec = planningRecordById(d.planningEntryId);
+  var redacteur = state.sectionMembers.filter(function(m){ return m.id===d.redacteurId; })[0];
+
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, natureLabel(d.natureId)+" · RG "+rgLabel(d)));
+
+  var info = h("div", {class:"info-list panel"});
+  [
+    ["Date du BJ", rec ? planningDateLabel(rec.date) : "—"],
+    ["Date du délibéré", planningDateLabel(d.dateDelibere)],
+    ["Date de prononcé", planningDateLabel(d.datePrononce)],
+    ["Date de remise (J-7)", planningDateLabel(deliberationRemiseDate(d))],
+    ["Rédacteur", redacteur ? memberDisplayName(redacteur) : "(conseiller supprimé)"],
+    ["Statut", d.remis ? "Remis"+(d.remisAt ? " le "+new Date(d.remisAt).toLocaleDateString("fr-FR") : "") : "À faire"]
+  ].forEach(function(r){
+    info.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, r[0]), h("div", {class:"info-value"}, r[1])));
+  });
+  body.appendChild(info);
+
+  if(!d.remis && isSelfMemberId(d.redacteurId)){
+    body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){
+      closeSheet();
+      markDeliberationRemis(d.id);
+    }}, "J’ai remis ma rédaction"));
+  }
+  if(rec && canManageDeliberationFor(rec.id)){
+    body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
+      closeSheet();
+      openDeliberationForm(rec.id, d.id);
+    }}, "Modifier le dossier"));
+  }
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
+
+  openSheet("Dossier en délibéré", body);
+}
+
+/* =================================================================
+   DÉLIBÉRÉS ET RÉDACTIONS — CÔTÉ ESPACE ADMINISTRATEUR TRANSVERSE
+   ------------------------------------------------------------------
+   Pendant, sur adminBuffer (une section DISTANTE, voir ADMINISTRATION
+   GÉNÉRALE plus haut), du module DÉLIBÉRÉS ET RÉDACTIONS construit sur
+   state pour la présidence d'une section — jusqu'ici, l'administrateur
+   désigné (isDesignatedAdmin) ne pouvait piloter les dossiers en
+   délibéré QUE depuis les écrans de sa propre section (canManageDeliberationFor
+   l'y autorise déjà), jamais depuis l'espace administrateur transverse
+   ("Administrer le CPH" → une section au choix), pourtant seul moyen de
+   gérer une section dont il n'est ni le président ni le vice-président.
+
+   Mêmes fonctions pures que le module d'origine (padRg8, rgLabel,
+   addDaysISO, deliberationRemiseDate, sanitizeDeliberationEntry,
+   natureLabel, groupPlanningByAudience, mergedRecordFromGroup) —
+   seules les fonctions qui LISENT explicitement state.* sont dupliquées
+   ci-dessous pour lire adminBuffer.* à la place. Aucun contrôle
+   canManageDeliberationFor ici : tout l'espace administrateur transverse
+   est déjà réservé à l'administrateur désigné (voir requireAdminBuffer),
+   la question ne se pose donc jamais. Envoi par le même mécanisme que le
+   reste de cet espace (scheduleAdminAutoPush), jamais saveAndPushDeliberations
+   (propre à l'appareil de la section elle-même). */
+function sysadminPlanningRecordById(id){
+  if(!id) return null;
+  return (adminBuffer.planning||[]).filter(function(p){ return p.id===id; })[0] || null;
+}
+/* Membres réels (jamais "Autre section" ni le sentinel "__self__", propre
+   à l'appareil qui l'a saisi) de la formation d'un dossier, pour le choix
+   du rédacteur — voir deliberationFormationMembers, son pendant côté
+   state. */
+function sysadminFormationMembers(planningEntryId){
+  var rec = sysadminPlanningRecordById(planningEntryId);
+  if(!rec) return [];
+  var group = groupPlanningByAudience((adminBuffer.planning||[]).filter(function(p){
+    return p.date===rec.date && p.type===rec.type;
+  }))[0];
+  if(!group) return [];
+  var merged = mergedRecordFromGroup(group);
+  var ids = [merged.president].concat(merged.assesseurs||[])
+    .filter(function(id){ return id && id!==OTHER_SECTION_ID && id!=="__self__"; });
+  var seen = {};
+  return ids.map(function(id){
+    if(seen[id]) return null; seen[id] = true;
+    return (adminBuffer.sectionMembers||[]).filter(function(m){ return m.id===id; })[0] || null;
+  }).filter(Boolean);
+}
+function sysadminDeliberationsForPlanningEntry(planningEntryId){
+  return (adminBuffer.deliberations||[]).filter(function(d){ return d.planningEntryId===planningEntryId; })
+    .sort(function(a,b){ return rgLabel(a).localeCompare(rgLabel(b), "fr"); });
+}
+/* Formulaire de création/modification d'un dossier — même contenu que
+   openDeliberationForm, sur adminBuffer.deliberations/planning/
+   sectionMembers plutôt que sur state. reRenderScreen : l'écran à
+   ré-afficher juste après (celui d'où la fiche a été ouverte), puisque
+   l'espace administrateur transverse ne partage pas navStack de la même
+   façon d'un écran à l'autre (formulaire ouvert aussi bien depuis
+   sysadmin-section-planning que depuis sysadmin-deliberations). */
+function openSysadminDeliberationForm(planningEntryId, existingId, reRenderScreen){
+  var rec = sysadminPlanningRecordById(planningEntryId);
+  if(!rec){ toast("Cette audience est introuvable — actualisez la section puis réessayez."); return; }
+  var existing = existingId ? (adminBuffer.deliberations||[]).filter(function(d){ return d.id===existingId; })[0] : null;
+  var formationMembers = sysadminFormationMembers(planningEntryId);
+
+  var form = h("div", null);
+  form.appendChild(h("p", {class:"lede"}, planningDateLabel(rec.date)+" — "+planningTypeLabel(rec.type)));
+
+  form.appendChild(h("label", {class:"field-label"}, "Nature"));
+  var natureSel = h("select", null, NATURES.filter(function(n){ return n.isRedaction; }).map(function(n){
+    return h("option", {value:n.id, selected: (existing ? existing.natureId : REDACTION_NATURE_IDS[0])===n.id ? "selected" : null}, n.label);
+  }));
+  form.appendChild(natureSel);
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Numéro RG"));
+  var currentYear = new Date().getFullYear();
+  var yearOpts = []; for(var y=currentYear-2; y<=currentYear+3; y++) yearOpts.push(y);
+  var anneeSel = h("select", {style:"flex:0 0 auto"}, yearOpts.map(function(y){
+    return h("option", {value:String(y), selected: (existing ? existing.rgAnnee : String(currentYear))===String(y) ? "selected" : null}, String(y));
+  }));
+  var numeroIn = h("input", {type:"text", inputmode:"numeric", maxlength:"8", placeholder:"00004587", style:"flex:1", value: existing ? existing.rgNumero : ""});
+  numeroIn.addEventListener("blur", function(){ numeroIn.value = padRg8(numeroIn.value); });
+  form.appendChild(h("div", {style:"display:flex; gap:8px;"}, anneeSel, numeroIn));
+  form.appendChild(h("div", {class:"footnote", style:"margin-top:4px"}, "Aucun nom de partie — seul le numéro de RG identifie le dossier (les chiffres manquants sont complétés par des zéros)."));
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Rédacteur"));
+  var redacteurSel = h("select", null,
+    [h("option", {value:"", selected: existing ? null : "selected"}, "— Choisir —")].concat(
+      formationMembers.map(function(m){ return h("option", {value:m.id, selected: existing && existing.redacteurId===m.id ? "selected" : null}, memberDisplayName(m)); })
+    )
+  );
+  form.appendChild(redacteurSel);
+  if(!formationMembers.length){
+    form.appendChild(h("div", {class:"footnote"}, "Aucun conseiller réel dans cette formation (uniquement « Autre section » ?) — impossible de désigner un rédacteur."));
+  }
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Date de prononcé"));
+  var prononceIn = h("input", {type:"date", value: existing ? existing.datePrononce : ""});
+  form.appendChild(prononceIn);
+
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Date du délibéré"));
+  var delibereIn = h("input", {type:"date", min: rec.date, value: existing ? existing.dateDelibere : ""});
+  form.appendChild(delibereIn);
+  var bornesInfo = h("div", {class:"footnote", style:"margin-top:4px"});
+  form.appendChild(bornesInfo);
+  var remiseInfo = h("div", {class:"footnote", style:"margin-top:10px"});
+  form.appendChild(remiseInfo);
+
+  function updateComputed(){
+    var remise = prononceIn.value ? deliberationRemiseDate({datePrononce:prononceIn.value}) : "";
+    delibereIn.max = remise || "";
+    bornesInfo.textContent = remise
+      ? "Le délibéré doit être fixé entre le "+planningDateLabel(rec.date)+" et le "+planningDateLabel(remise)+"."
+      : "Renseignez d’abord la date de prononcé pour borner la date du délibéré.";
+    remiseInfo.textContent = remise ? "Date de remise de la rédaction, calculée automatiquement (J-7) : "+planningDateLabel(remise)+"." : "";
+  }
+  prononceIn.addEventListener("change", updateComputed);
+  updateComputed();
+
+  var errorBox = h("div", {class:"footnote", style:"margin-top:8px;color:var(--red)"});
+  form.appendChild(errorBox);
+
+  function validationError(rgNumero){
+    if(!rgNumero || rgNumero.length!==8) return "Renseignez un numéro de RG.";
+    if(!anneeSel.value) return "Choisissez l’année du RG.";
+    if(!redacteurSel.value) return "Choisissez un rédacteur.";
+    if(!prononceIn.value) return "Renseignez la date de prononcé.";
+    if(!delibereIn.value) return "Renseignez la date du délibéré.";
+    if(delibereIn.value < rec.date) return "La date du délibéré ne peut pas être antérieure à celle du BJ.";
+    var remise = deliberationRemiseDate({datePrononce:prononceIn.value});
+    if(remise && delibereIn.value > remise) return "La date du délibéré doit être antérieure à la date de remise (prononcé − 7 jours).";
+    return null;
+  }
+
+  var targetScreen = reRenderScreen || navStack[navStack.length-1];
+  form.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:16px", onclick:function(){
+    var rgNumero = padRg8(numeroIn.value);
+    numeroIn.value = rgNumero;
+    var err = validationError(rgNumero);
+    if(err){ errorBox.textContent = err; return; }
+    var now = new Date().toISOString();
+    if(existing){
+      existing.natureId = natureSel.value;
+      existing.rgAnnee = anneeSel.value;
+      existing.rgNumero = rgNumero;
+      existing.redacteurId = redacteurSel.value;
+      existing.datePrononce = prononceIn.value;
+      existing.dateDelibere = delibereIn.value;
+      existing.updatedAt = now;
+    } else {
+      adminBuffer.deliberations.push({
+        id: uid(), planningEntryId: planningEntryId, natureId: natureSel.value,
+        rgAnnee: anneeSel.value, rgNumero: rgNumero, redacteurId: redacteurSel.value,
+        datePrononce: prononceIn.value, dateDelibere: delibereIn.value,
+        remis:false, remisAt:null, createdAt: now, updatedAt: now
+      });
+    }
+    closeSheet();
+    render(targetScreen);
+    scheduleAdminAutoPush();
+    toast(existing ? "Dossier modifié." : "Dossier créé.");
+  }}, existing ? "Enregistrer" : "Créer le dossier"));
+
+  if(existing){
+    form.appendChild(h("button", {class:"sheet-btn danger", style:"margin-top:8px", onclick:function(){
+      openSheet("Supprimer ce dossier", h("div", null,
+        h("p", {class:"lede"}, "Le dossier RG "+rgLabel(existing)+" sera définitivement supprimé. Cette action est irréversible."),
+        h("button", {class:"sheet-btn danger", onclick:function(){
+          adminBuffer.deliberations = adminBuffer.deliberations.filter(function(x){ return x.id!==existing.id; });
+          closeSheet();
+          render(targetScreen);
+          scheduleAdminAutoPush();
+          toast("Dossier supprimé.");
+        }}, "Supprimer définitivement"),
+        h("button", {class:"sheet-btn ghost", onclick:function(){ openSysadminDeliberationForm(planningEntryId, existing.id, reRenderScreen); }}, "Annuler")
+      ));
+    }}, "Supprimer ce dossier"));
+  }
+  form.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Annuler"));
+
+  openSheet(existing ? "Modifier le dossier" : "Nouveau dossier de délibéré", form);
+}
+/* Détail d'un dossier vu depuis l'espace administrateur transverse :
+   contrairement à openDeliberationEntryDetail (côté state, un membre de
+   la formation), l'administrateur peut toujours modifier ou basculer le
+   statut "remis" — jamais de restriction en lecture seule ici, tout cet
+   espace lui étant déjà réservé. */
+function openSysadminDeliberationEntryDetail(deliberationId, reRenderScreen){
+  var d = (adminBuffer.deliberations||[]).filter(function(x){ return x.id===deliberationId; })[0];
+  if(!d){ toast("Ce dossier est introuvable — actualisez la section puis réessayez."); return; }
+  var rec = sysadminPlanningRecordById(d.planningEntryId);
+  var redacteur = (adminBuffer.sectionMembers||[]).filter(function(m){ return m.id===d.redacteurId; })[0];
+  var targetScreen = reRenderScreen || navStack[navStack.length-1];
+
+  var body = h("div", null);
+  body.appendChild(h("p", {class:"lede"}, natureLabel(d.natureId)+" · RG "+rgLabel(d)));
+
+  var info = h("div", {class:"info-list panel"});
+  [
+    ["Date du BJ", rec ? planningDateLabel(rec.date) : "—"],
+    ["Date du délibéré", planningDateLabel(d.dateDelibere)],
+    ["Date de prononcé", planningDateLabel(d.datePrononce)],
+    ["Date de remise (J-7)", planningDateLabel(deliberationRemiseDate(d))],
+    ["Rédacteur", redacteur ? memberDisplayName(redacteur) : "(conseiller supprimé)"],
+    ["Statut", d.remis ? "Remis"+(d.remisAt ? " le "+new Date(d.remisAt).toLocaleDateString("fr-FR") : "") : "À faire"]
+  ].forEach(function(r){
+    info.appendChild(h("div", {class:"info-row"}, h("div", {class:"info-label"}, r[0]), h("div", {class:"info-value"}, r[1])));
+  });
+  body.appendChild(info);
+
+  body.appendChild(h("button", {class:"sheet-btn accent", style:"margin-top:14px", onclick:function(){
+    d.remis = !d.remis;
+    d.remisAt = d.remis ? new Date().toISOString() : null;
+    d.updatedAt = new Date().toISOString();
+    closeSheet();
+    render(targetScreen);
+    scheduleAdminAutoPush();
+    toast(d.remis ? "Dossier marqué remis." : "Dossier remis à faire.");
+  }}, d.remis ? "Marquer non remis" : "Marquer remis"));
+  if(rec){
+    body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){
+      closeSheet();
+      openSysadminDeliberationForm(rec.id, d.id, targetScreen);
+    }}, "Modifier le dossier"));
+  }
+  body.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:closeSheet}, "Fermer"));
+
+  openSheet("Dossier en délibéré", body);
 }
 
 /* Formulaire combiné de l'espace administrateur pour une audience : à la
@@ -10970,6 +11937,38 @@ function openAdminAudienceForm(group){
   typeSel.addEventListener("change", updateAllRoles);
   presidenceSel.addEventListener("change", updateAllRoles);
   updateAllRoles();
+
+  /* Dossiers en délibéré rattachés à cette audience — voir le module
+     DÉLIBÉRÉS ET RÉDACTIONS — CÔTÉ ESPACE ADMINISTRATEUR TRANSVERSE
+     juste au-dessus de cette fonction. Uniquement pour une audience de
+     BJ déjà enregistrée (isEdit) : un dossier référence toujours un
+     enregistrement DÉJÀ existant du côté qui préside réellement, jamais
+     un enregistrement pas encore créé (« + Ajouter une date »). */
+  if(isEdit && group.type==="bj"){
+    var presidingRec = group.byCollege[group.presidence] || null;
+    form.appendChild(h("div", {class:"section-title", style:"font-size:.9rem; margin-top:18px;"}, "Dossiers en délibéré"));
+    if(!presidingRec || !presidingRec.president){
+      form.appendChild(h("p", {class:"footnote"}, "Complétez d’abord le président de cette audience pour pouvoir y rattacher un dossier."));
+    } else {
+      var sysDossiers = sysadminDeliberationsForPlanningEntry(presidingRec.id);
+      var sysDPanel = h("div", {class:"panel"});
+      if(!sysDossiers.length){
+        sysDPanel.appendChild(h("p", {class:"lede", style:"margin:0"}, "Aucun dossier enregistré pour cette audience."));
+      } else {
+        sysDossiers.forEach(function(d){
+          sysDPanel.appendChild(h("div", {class:"row-click", onclick:function(){ closeSheet(); openSysadminDeliberationEntryDetail(d.id, "sysadmin-section-planning"); }},
+            h("div", {class:"rc-main"},
+              h("div", {class:"rc-title"}, "RG "+rgLabel(d)),
+              h("div", {class:"rc-sub"}, natureLabel(d.natureId)+" · "+(d.remis ? "Remis" : "Remise le "+planningDateLabel(deliberationRemiseDate(d))))
+            ),
+            icon("ic-chev", "chev")
+          ));
+        });
+      }
+      form.appendChild(sysDPanel);
+      form.appendChild(h("button", {class:"sheet-btn ghost", style:"margin-top:8px", onclick:function(){ closeSheet(); openSysadminDeliberationForm(presidingRec.id, null, "sysadmin-section-planning"); }}, "+ Ajouter un dossier"));
+    }
+  }
 
   var actions = h("div", {style:"margin-top:18px"});
   actions.appendChild(h("button", {class:"sheet-btn primary", onclick:function(){
@@ -12356,6 +13355,34 @@ renderers.settings = function(root){
   });
   themePanel.appendChild(themeChips);
   root.appendChild(themePanel);
+
+  /* Rappels par notification système (voir maybeNotifyRedactionReminder) —
+     facultatif, avec autorisation explicite du navigateur, demandée
+     uniquement au moment où le conseiller active ce réglage. La bannière
+     d'accueil pour les rédactions à remettre reste, elle, toujours
+     affichée quel que soit ce réglage : cette notification est un rappel
+     EN PLUS, utile quand l'application n'est qu'en arrière-plan. */
+  root.appendChild(h("div", {class:"section-title"}, "Rappels"));
+  var remindersPanel = h("div", {class:"panel"});
+  if(typeof Notification === "undefined"){
+    remindersPanel.appendChild(h("div", {class:"footnote", style:"margin:0"}, "Les notifications ne sont pas prises en charge par ce navigateur."));
+  } else {
+    remindersPanel.appendChild(boolField("Me notifier des rédactions à remettre (délibérés)", p.redactionReminders, function(v){
+      if(!v){ p.redactionReminders = false; saveState(); render("settings"); return; }
+      if(Notification.permission==="granted"){ p.redactionReminders = true; saveState(); render("settings"); return; }
+      if(Notification.permission==="denied"){
+        toast("Les notifications sont bloquées pour cette application dans les réglages du navigateur.");
+        return;
+      }
+      Notification.requestPermission().then(function(perm){
+        p.redactionReminders = (perm==="granted");
+        saveState(); render("settings");
+        if(perm!=="granted") toast("Autorisation refusée — la bannière sur l’accueil reste disponible.");
+      });
+    }));
+    remindersPanel.appendChild(h("div", {class:"footnote", style:"margin-top:8px"}, "Une notification s’affiche à l’ouverture de l’application si une rédaction arrive à échéance sous 7 jours ou est en retard — en plus de la bannière déjà visible sur l’accueil."));
+  }
+  root.appendChild(remindersPanel);
 
   root.appendChild(h("div", {class:"section-title"}, "Vos données"));
   root.appendChild(h("p", {class:"lede"}, "Tout est enregistré uniquement sur cet appareil, sans serveur. Sauvegardez-les manuellement ci-dessous, restaurez une sauvegarde existante, ou réinitialisez l’application."));
