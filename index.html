@@ -2292,6 +2292,30 @@ function markSyncDone(){
   state.sync.lastSyncAt = new Date().toISOString();
   state.sync.lastSyncedSnapshot = JSON.stringify(syncPayloadFromState());
   saveState();
+  pingMyPresence();
+}
+
+/* Signale, pour le nouvel écran administrateur « Dernières connexions »
+   (demande de l'utilisateur : « voir le nombre de connexions des
+   utilisateurs et les dernières dates de connexion »), qu'une
+   synchronisation vient de réussir pour la fiche choisie sur CET
+   appareil. Une « connexion » se définit ici comme une synchronisation
+   réussie (pull ou push, automatique ou manuelle — tout ce qui appelle
+   déjà markSyncDone) : la seule notion qui existe dans une application
+   sans compte ni serveur d'authentification. Ignoré tant qu'aucune fiche
+   n'est choisie (state.profile.memberId), faute d'identité à laquelle
+   rattacher le signal. Toujours "best effort" : jamais bloquant, jamais
+   retenté en cas d'échec (une connexion manquée n'a aucune conséquence,
+   la suivante la rattrapera) — voir pingSectionPresence côté pont
+   Firebase et le document presence/{sectionCode} dans firestore.rules.
+   Uniquement pour la section propre à l'appareil (state.sync), jamais
+   pour l'espace administrateur transverse (adminBuffer) ni pour les
+   référés (state.refereSync, module séparé, non couvert pour l'instant). */
+function pingMyPresence(){
+  if(!syncAvailable() || !state.sync.sectionCode || !state.profile.memberId) return;
+  window.__fbFirestore.pingSectionPresence(state.sync.sectionCode, state.profile.memberId).catch(function(err){
+    if(window.console && console.warn) console.warn("Signal de connexion non envoyé :", err);
+  });
 }
 
 /* Chargement automatique et silencieux du planning de section à
@@ -2995,7 +3019,7 @@ function openAdminIndexSectionSheet(cph, section){
 
 function openAdminSection(cph, section, sectionCode){
   clearAdminAutoPush(); // n'importe quel envoi automatique programmé concernait l'ancienne section ouverte, le cas échéant
-  adminBuffer = {cph:cph, section:section, sectionCode:sectionCode, sectionMembers:[], planning:[], sectionSettings:defaultSectionSettings(), deliberations:[], loaded:false};
+  adminBuffer = {cph:cph, section:section, sectionCode:sectionCode, sectionMembers:[], planning:[], sectionSettings:defaultSectionSettings(), deliberations:[], presence:{}, loaded:false};
   /* adminMemberPins n'est volontairement PAS remis à zéro ici : ouvrir une
      section fraîchement créée (openAdminSectionCreatedSheet -> "Continuer")
      appelle aussi cette fonction, et le code du président généré à
@@ -3016,7 +3040,17 @@ function openAdminSection(cph, section, sectionCode){
 function refreshAdminBuffer(){
   if(!adminBuffer) return;
   clearAdminAutoPush(); // "Recharger" annule les modifications non envoyées : rien à envoyer automatiquement non plus
-  pullSectionSync(adminBuffer.sectionCode).then(function(result){
+  /* "Dernières connexions" (adminBuffer.presence) se récupère à part,
+     depuis presence/{sectionCode} (voir pingMyPresence/pingSectionPresence)
+     — un document séparé du document de section chiffré, en parallèle,
+     jamais bloquant pour le reste : une erreur ici (ou l'absence du
+     document, avant la toute première connexion signalée) n'empêche
+     jamais de consulter/modifier annuaire et planning comme avant. */
+  Promise.all([
+    pullSectionSync(adminBuffer.sectionCode),
+    window.__fbFirestore.getPresenceDoc(adminBuffer.sectionCode).catch(function(){ return null; })
+  ]).then(function(results){
+    var result = results[0], presenceDoc = results[1];
     if(result){
       adminBuffer.sectionMembers = (result.payload && result.payload.sectionMembers) || [];
       adminBuffer.planning = (result.payload && result.payload.planning) || [];
@@ -3032,6 +3066,7 @@ function refreshAdminBuffer(){
          jamais une fusion champ par champ (voir syncPayloadFromState). */
       adminBuffer.deliberations = sanitizeDeliberationsArray(result.payload && result.payload.deliberations);
     }
+    adminBuffer.presence = (presenceDoc && presenceDoc.members) || {};
     adminBuffer.loaded = true;
     render("sysadmin-section");
   }).catch(function(){
@@ -4286,6 +4321,7 @@ var SCREEN_TITLES = {
   "sysadmin-panel":"Espace administrateur", "sysadmin-section":"Section administrée",
   "sysadmin-section-members":"Liste de la section", "sysadmin-section-planning":"Planning de la section",
   "sysadmin-section-settings":"Paramètres de la section", "sysadmin-cph-greffiers":"Greffiers du CPH",
+  "sysadmin-section-presence":"Dernières connexions",
   "onboarding-activite":"Bienvenue", "onboarding-signature":"Bienvenue",
   "greffier-home":"Espace greffier", "greffier-section":"Section",
   "greffier-section-planning":"Planning", "greffier-section-annuaire":"Conseillers",
@@ -5067,6 +5103,12 @@ renderers["sysadmin-section"] = function(root){
   cardsPanel.appendChild(sectionCard("ic-scale", "Délibérés et rédactions", (adminBuffer.deliberations||[]).length ? (sysDelibPending+(sysDelibPending>1 ? " rédactions en attente" : " rédaction en attente")+" sur "+adminBuffer.deliberations.length) : "Aucun dossier enregistré pour l’instant", "sysadmin-deliberations"));
   cardsPanel.appendChild(sectionCard("ic-gear", "Paramètres de la section", "Liens utiles, horaires par défaut, contacts", "sysadmin-section-settings"));
   cardsPanel.appendChild(sectionCard("ic-building", "Greffiers du CPH", (adminBuffer.sectionSettings.cphGreffiers||[]).length ? ((adminBuffer.sectionSettings.cphGreffiers||[]).length+((adminBuffer.sectionSettings.cphGreffiers||[]).length>1 ? " greffiers enregistrés" : " greffier enregistré")) : "Aucun greffier enregistré", "sysadmin-cph-greffiers"));
+  cardsPanel.appendChild(sectionCard("ic-clock", "Dernières connexions", (function(){
+    var total = adminBuffer.sectionMembers.length;
+    if(!total) return "Aucun conseiller enregistré";
+    var connected = adminBuffer.sectionMembers.filter(function(m){ return adminBuffer.presence && adminBuffer.presence[m.id]; }).length;
+    return connected+" sur "+total+(total>1 ? " conseillers déjà connectés" : " conseiller déjà connecté");
+  })(), "sysadmin-section-presence"));
   /* Pas un simple sectionCard(...) : contrairement aux trois cartes
      ci-dessus (qui naviguent dans CETTE MÊME section), "Référés du CPH"
      bascule adminBuffer vers une section réservée différente (voir
@@ -5420,6 +5462,70 @@ renderers["sysadmin-section-members"] = function(root){
   }, icon("ic-upload")));
 
   root.appendChild(adminSectionSaveReminder());
+};
+
+/* Écran « Dernières connexions » (demande de l'utilisateur : « voir le
+   nombre de connexions des utilisateurs et les dernières dates de
+   connexion »). Une « connexion » se définit ici comme une
+   synchronisation réussie avec cette section (voir pingMyPresence,
+   appelée par markSyncDone) — la seule notion de connexion qui existe
+   dans une application sans compte ni serveur d'authentification :
+   aucun horodatage précis de chaque ouverture, juste la dernière fois
+   où l'appareil d'un conseiller a effectivement échangé avec la
+   section. Les fiches jamais connectées (adminBuffer.presence n'a
+   aucune entrée pour leur id — par ex. juste créées, ou créées avant
+   l'ajout de ce suivi) remontent en tête, signalées comme une
+   incomplétude d'audience (même classe "incomplete"), pour repérer d'un
+   coup d'œil qui n'utilise pas/plus l'application. Réservé à l'espace
+   administrateur, comme demandé explicitement — ni "Gérer ma section"
+   (président/vice-président) ni aucun autre écran n'y donnent accès. */
+renderers["sysadmin-section-presence"] = function(root){
+  if(!requireAdminBuffer(root)) return;
+  if(!adminBuffer.loaded){
+    root.appendChild(h("div", {class:"init-empty"}, h("p", null, "Chargement des données de la section…")));
+    return;
+  }
+  root.appendChild(h("p", {class:"lede"}, "Dernière synchronisation connue de chaque conseiller avec cette section — un indicateur d'usage, pas un journal complet de chaque ouverture de l'application."));
+
+  var presence = adminBuffer.presence || {};
+  var rows = adminBuffer.sectionMembers.slice().map(function(m){
+    var p = presence[m.id];
+    return { member: m, lastSyncAt: p ? p.lastSyncAt : null };
+  }).sort(function(a, b){
+    if(!a.lastSyncAt && !b.lastSyncAt) return memberSortCompare(a.member, b.member);
+    if(!a.lastSyncAt) return -1;
+    if(!b.lastSyncAt) return 1;
+    return a.lastSyncAt < b.lastSyncAt ? -1 : a.lastSyncAt > b.lastSyncAt ? 1 : 0;
+  });
+
+  var list = h("div", {class:"panel"});
+  if(!rows.length){
+    list.appendChild(h("div", {class:"footnote"}, "Aucun conseiller enregistré."));
+  } else {
+    rows.forEach(function(r){
+      var sub;
+      if(r.lastSyncAt){
+        var d = new Date(r.lastSyncAt);
+        sub = !isNaN(d) ? "Dernière connexion le "+d.toLocaleDateString("fr-FR")+" à "+d.toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit"}) : "Dernière connexion inconnue";
+      } else {
+        sub = "Jamais connecté depuis l’ajout de ce suivi";
+      }
+      list.appendChild(h("div", {class:"row-click"+(r.lastSyncAt ? "" : " incomplete"), tabindex:"0",
+          onclick:function(){ openAdminMemberForm(r.member); },
+          onkeydown:function(e){ if(e.key==="Enter") openAdminMemberForm(r.member); }},
+        h("div", {class:"rc-main"},
+          h("div", {class:"rc-title"}, (r.lastSyncAt ? "" : "⚠ ")+(memberDisplayName(r.member) || "(Sans nom)")),
+          h("div", {class:"rc-sub"}, sub)
+        )
+      ));
+    });
+  }
+  root.appendChild(list);
+
+  var connectedCount = rows.filter(function(r){ return r.lastSyncAt; }).length;
+  root.appendChild(h("div", {class:"footnote", style:"margin-top:12px"},
+    rows.length+(rows.length>1 ? " conseillers suivis, dont " : " conseiller suivi, dont ")+connectedCount+" déjà connecté"+(connectedCount>1?"s":"")+" au moins une fois depuis l’ajout de ce suivi."
+  ));
 };
 
 /* Écran séparé « Planning de la section » (ex-bloc « Planning » de
@@ -14004,6 +14110,36 @@ render(navStack[navStack.length-1]);
     setGreffierAccessDoc: function(accessCode, data){
       var payload = Object.assign({}, data, { updatedAt: serverTimestamp() });
       return setDoc(doc(db, "greffierAccess", accessCode), payload);
+    },
+    /* « Dernières connexions » (voir pingMyPresence/markSyncDone et
+       renderers["sysadmin-section-presence"] dans le script classique) :
+       un document par section, identifiant déterministe comme "sections"
+       ci-dessus (le code de section suffit à le lire), mais qui ne
+       contient JAMAIS ni nom ni coordonnée — seulement, pour chaque
+       memberId (déjà un identifiant opaque sans signification, voir
+       uid()), l'horodatage de sa dernière synchronisation réussie.
+       L'administrateur retrouve le nom correspondant en le croisant avec
+       l'annuaire de la section, déjà déchiffré par ailleurs. Écrit avec
+       merge:true et une clé de premier niveau ("members.<id>" via un
+       objet imbriqué, même technique que setCphDirectorySectionEntry
+       ci-dessus) : chaque appareil ne touche jamais qu'à l'entrée de sa
+       propre fiche. */
+    getPresenceDoc: function(sectionCode){
+      return getDoc(doc(db, "presence", sectionCode)).then(function(snap){
+        if(!snap.exists()) return null;
+        var data = snap.data();
+        var members = {};
+        Object.keys(data.members||{}).forEach(function(id){
+          var e = data.members[id] || {};
+          members[id] = { lastSyncAt: tsToIso(e.lastSyncAt) };
+        });
+        return { members: members };
+      });
+    },
+    pingSectionPresence: function(sectionCode, memberId){
+      var patch = {};
+      patch[memberId] = { lastSyncAt: serverTimestamp() };
+      return setDoc(doc(db, "presence", sectionCode), { members: patch }, { merge: true });
     }
   };
 
