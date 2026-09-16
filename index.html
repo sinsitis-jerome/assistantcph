@@ -1430,7 +1430,7 @@ function migrate(parsed){
       if(typeof p.cphAutre==="string" && p.cphAutre) s.profile.cphAutre = p.cphAutre;
       s.profile.remunere = p.remunere===true ? true : (p.remunere===false ? false : null);
       s.profile.poste = p.poste===true ? true : (p.poste===false ? false : null);
-      var timeRe = /^([01]\d|2[0-3]):(00|30)$/;
+      var timeRe = /^([01]\d|2[0-3]):[0-5]\d$/;
       s.profile.horaireDebut = typeof p.horaireDebut==="string" && timeRe.test(p.horaireDebut) ? p.horaireDebut : "";
       s.profile.horaireFin = typeof p.horaireFin==="string" && timeRe.test(p.horaireFin) ? p.horaireFin : "";
       /* sectionRole remplace l'ancien booléen presidentSection (un seul
@@ -4875,21 +4875,9 @@ renderers["onboarding-activite"] = function(root){
   if(p.remunere===true){
     panel.appendChild(h("div", {style:"margin-top:14px"}, boolField("Êtes-vous posté(e) ?", p.poste, function(v){ p.poste=v; saveState(); render("onboarding-activite"); })));
     panel.appendChild(h("label", {class:"field-label"}, "Horaires de travail habituels (optionnel)"));
-    var timeRow = h("div", {class:"btn-row"},
-      h("div", null,
-        h("label", {class:"field-label"}, "Début"),
-        h("select", {onchange:function(e){ p.horaireDebut=e.target.value; saveState(); }},
-          h("option", {value:"", selected: p.horaireDebut?null:"selected"}, "—"),
-          TIME_OPTIONS.map(function(t){ return h("option", {value:t[0], selected: t[0]===p.horaireDebut?"selected":null}, t[1]); }))
-      ),
-      h("div", null,
-        h("label", {class:"field-label"}, "Fin"),
-        h("select", {onchange:function(e){ p.horaireFin=e.target.value; saveState(); }},
-          h("option", {value:"", selected: p.horaireFin?null:"selected"}, "—"),
-          TIME_OPTIONS.map(function(t){ return h("option", {value:t[0], selected: t[0]===p.horaireFin?"selected":null}, t[1]); }))
-      )
-    );
-    panel.appendChild(timeRow);
+    var horaireDebutF = makeTimeField("Début", p.horaireDebut, function(){ p.horaireDebut = horaireDebutF.getHHMM() || ""; saveState(); });
+    var horaireFinF = makeTimeField("Fin", p.horaireFin, function(){ p.horaireFin = horaireFinF.getHHMM() || ""; saveState(); });
+    panel.appendChild(h("div", {class:"btn-row"}, horaireDebutF.wrap, horaireFinF.wrap));
     panel.appendChild(h("div", {class:"footnote", style:"margin-top:8px"}, "Champ facultatif. Utile pour les calculs liés aux vacations postées."));
   }
   root.appendChild(panel);
@@ -13729,21 +13717,9 @@ renderers.settings = function(root){
   if(p.remunere===true){
     workPanel.appendChild(h("div", {style:"margin-top:14px"}, boolField("Êtes-vous posté(e) ?", p.poste, function(v){ p.poste=v; saveState(); render("settings"); })));
     workPanel.appendChild(h("label", {class:"field-label"}, "Horaires de travail habituels (optionnel)"));
-    var timeRow = h("div", {class:"btn-row"},
-      h("div", null,
-        h("label", {class:"field-label"}, "Début"),
-        h("select", {onchange:function(e){ p.horaireDebut=e.target.value; saveState(); }},
-          h("option", {value:"", selected: p.horaireDebut?null:"selected"}, "—"),
-          TIME_OPTIONS.map(function(t){ return h("option", {value:t[0], selected: t[0]===p.horaireDebut?"selected":null}, t[1]); }))
-      ),
-      h("div", null,
-        h("label", {class:"field-label"}, "Fin"),
-        h("select", {onchange:function(e){ p.horaireFin=e.target.value; saveState(); }},
-          h("option", {value:"", selected: p.horaireFin?null:"selected"}, "—"),
-          TIME_OPTIONS.map(function(t){ return h("option", {value:t[0], selected: t[0]===p.horaireFin?"selected":null}, t[1]); }))
-      )
-    );
-    workPanel.appendChild(timeRow);
+    var settingsHoraireDebutF = makeTimeField("Début", p.horaireDebut, function(){ p.horaireDebut = settingsHoraireDebutF.getHHMM() || ""; saveState(); });
+    var settingsHoraireFinF = makeTimeField("Fin", p.horaireFin, function(){ p.horaireFin = settingsHoraireFinF.getHHMM() || ""; saveState(); });
+    workPanel.appendChild(h("div", {class:"btn-row"}, settingsHoraireDebutF.wrap, settingsHoraireFinF.wrap));
     workPanel.appendChild(h("div", {class:"footnote", style:"margin-top:8px"}, "Champ facultatif — non requis pour activer l’application. Utile pour les calculs liés aux vacations postées."));
   }
   root.appendChild(workPanel);
