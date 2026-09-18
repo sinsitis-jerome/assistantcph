@@ -2236,6 +2236,22 @@ function applySyncPayloadToState(payload){
   state.planning = (payload && Array.isArray(payload.planning)) ? payload.planning : [];
   state.sectionSettings = sanitizeSectionSettings(payload && payload.sectionSettings);
   state.deliberations = sanitizeDeliberationsArray(payload && payload.deliberations);
+  /* Fonction en section et fonction au niveau du CPH : relues ici depuis
+     l'annuaire tout juste synchronisé, à CHAQUE synchronisation réussie,
+     plutôt qu'une seule fois au moment de "Changer mon identité" (voir
+     openPickMyMemberSheet/deriveCphRoleFor) — un changement de rôle posé
+     par l'administrateur (ex. désignation d'un(e) vice-président(e) de
+     section) doit se refléter sur l'appareil concerné dès la prochaine
+     synchronisation, sans exiger ce geste manuel (voir échange avec
+     l'utilisateur : le contraire a été signalé à deux reprises comme
+     source de confusion — étiquette de fonction absente puis, plus grave,
+     restriction de visibilité du planning de section pour un(e)
+     vice-président(e) fraîchement désigné(e)). */
+  if(myId){
+    var me = incomingMembers.filter(function(m){ return m.id===myId; })[0];
+    state.profile.sectionRole = (me && me.sectionRole) || "none";
+    state.profile.cphRole = deriveCphRoleFor(myId);
+  }
 }
 /* Valeur effective d'un lien utile : priorité à la donnée de section
    (configurée par l'administrateur, identique pour tous), repli sur
@@ -3540,7 +3556,12 @@ function openPickMyMemberSheet(onDone){
        fiche par l'administrateur — plus jamais déclarée soi-même (voir
        module ADMINISTRATION GÉNÉRALE). "none" plutôt que null : le profil est ainsi considéré complet
        (voir isProfileComplete) dès qu'une fiche est choisie, sans exiger
-       un passage superflu par Réglages. */
+       un passage superflu par Réglages. Fixée ici une première fois au
+       choix de la fiche ; ensuite tenue à jour automatiquement à chaque
+       synchronisation réussie par applySyncPayloadToState (voir plus haut
+       dans le fichier), qui relit ce même champ sur la fiche fraîchement
+       reçue — plus besoin de repasser par "Changer mon identité" après
+       qu'un rôle ait été posé ou changé par l'administrateur. */
     state.profile.sectionRole = m.sectionRole || "none";
     /* Fonction au niveau du CPH (distincte de sectionRole ci-dessus) : voir
        deriveCphRoleFor — permet à un président(e)/vice-président(e) de
@@ -5642,12 +5663,14 @@ function isCphOfficer(role){ return role==="president" || role==="vice-president
    FICHE COURANTE de cet appareil (celle qu'on vient de choisir dans son
    PROPRE annuaire de section, donc dans state.sectionSettings déjà
    synchronisé pour CETTE section) est la cible de l'une des deux. Comme
-   sectionRole, dérivée une seule fois au moment de choisir sa fiche (voir
-   selectMember), jamais recalculée automatiquement en arrière-plan : une
-   nouvelle désignation par l'administrateur n'est reprise sur l'appareil
-   concerné qu'après un nouveau passage par "Changer mon identité" — même
-   limite déjà acceptée pour sectionRole, pour rester cohérent plutôt que
-   d'en construire une seule à moitié. */
+   sectionRole, fixée une première fois au moment de choisir sa fiche (voir
+   selectMember) puis désormais recalculée automatiquement à chaque
+   synchronisation réussie par applySyncPayloadToState (voir plus haut dans
+   le fichier) : une nouvelle désignation par l'administrateur est donc
+   reprise sur l'appareil concerné dès la prochaine synchronisation, plus
+   besoin d'un nouveau passage par "Changer mon identité" (limite d'abord
+   acceptée avec l'utilisateur, puis levée après qu'elle a été signalée à
+   deux reprises comme source de confusion — voir applySyncPayloadToState). */
 function deriveCphRoleFor(memberId){
   var cph = state.profile.cph===CPH_AUTRE ? state.profile.cphAutre : state.profile.cph;
   var section = state.profile.section;
