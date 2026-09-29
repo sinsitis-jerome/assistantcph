@@ -6986,7 +6986,7 @@ function myInvolvedPlanningEntries(){
    délibéré — fixée librement entre les conseillers à l'issue de
    l'audience, toujours comprise entre le BJ et la date de remise —,
    date de prononcé, et date de remise de la rédaction, calculée
-   automatiquement à J-7 du prononcé et jamais saisie à la main).
+   automatiquement à J-10 du prononcé et jamais saisie à la main).
 
    Aucun nom de partie dans l'application : seul le numéro de RG
    identifie un dossier (rgAnnee sur 4 chiffres + rgNumero sur 8
@@ -7039,8 +7039,9 @@ function addDaysISO(dateStr, n){
   return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0");
 }
 /* Date de remise de la rédaction : toujours calculée, jamais saisie —
-   J-7 par rapport à la date de prononcé retenue avec le greffe. */
-function deliberationRemiseDate(d){ return (d && d.datePrononce) ? addDaysISO(d.datePrononce, -7) : ""; }
+   J-10 par rapport à la date de prononcé retenue avec le greffe (délai
+   porté de 7 à 10 jours à la demande de l'utilisateur — 2026-09). */
+function deliberationRemiseDate(d){ return (d && d.datePrononce) ? addDaysISO(d.datePrononce, -10) : ""; }
 
 function sanitizeDeliberationEntry(raw){
   if(!raw || typeof raw!=="object") return null;
@@ -7166,7 +7167,7 @@ function natureLabel(natureId){
      - "redaction" : le délibéré a déjà eu lieu, la rédaction reste à
                      remettre, mais la date de remise n'est pas encore
                      dépassée.
-     - "retard"    : la date de remise (J-7 avant le prononcé) est
+     - "retard"    : la date de remise (J-10 avant le prononcé) est
                      dépassée et la rédaction n'est toujours pas remise —
                      prioritaire sur "delibere" dans le cas résiduel où
                      les deux seraient vraies à la fois (ne devrait pas
@@ -11894,7 +11895,7 @@ function openDeliberationForm(planningEntryId, existingId){
     bornesInfo.textContent = remise
       ? "Le délibéré doit être fixé entre le "+planningDateLabel(rec.date)+" et le "+planningDateLabel(remise)+"."
       : "Renseignez d’abord la date de prononcé pour borner la date du délibéré.";
-    remiseInfo.textContent = remise ? "Date de remise de la rédaction, calculée automatiquement (J-7) : "+planningDateLabel(remise)+"." : "";
+    remiseInfo.textContent = remise ? "Date de remise de la rédaction, calculée automatiquement (J-10) : "+planningDateLabel(remise)+"." : "";
   }
   prononceIn.addEventListener("change", updateComputed);
   updateComputed();
@@ -11910,7 +11911,7 @@ function openDeliberationForm(planningEntryId, existingId){
     if(!delibereIn.value) return "Renseignez la date du délibéré.";
     if(delibereIn.value < rec.date) return "La date du délibéré ne peut pas être antérieure à celle du BJ.";
     var remise = deliberationRemiseDate({datePrononce:prononceIn.value});
-    if(remise && delibereIn.value > remise) return "La date du délibéré doit être antérieure à la date de remise (prononcé − 7 jours).";
+    if(remise && delibereIn.value > remise) return "La date du délibéré doit être antérieure à la date de remise (prononcé − 10 jours).";
     return null;
   }
 
@@ -11978,7 +11979,7 @@ function openDeliberationEntryDetail(deliberationId){
     ["Date du BJ", rec ? planningDateLabel(rec.date) : "—"],
     ["Date du délibéré", planningDateLabel(d.dateDelibere)],
     ["Date de prononcé", planningDateLabel(d.datePrononce)],
-    ["Date de remise (J-7)", planningDateLabel(deliberationRemiseDate(d))],
+    ["Date de remise (J-10)", planningDateLabel(deliberationRemiseDate(d))],
     ["Rédacteur", redacteur ? memberDisplayName(redacteur) : "(conseiller supprimé)"],
     ["Statut", d.remis ? "Remis"+(d.remisAt ? " le "+new Date(d.remisAt).toLocaleDateString("fr-FR") : "") : "À faire"]
   ].forEach(function(r){
@@ -12126,7 +12127,7 @@ function openSysadminDeliberationForm(planningEntryId, existingId, reRenderScree
     bornesInfo.textContent = remise
       ? "Le délibéré doit être fixé entre le "+planningDateLabel(rec.date)+" et le "+planningDateLabel(remise)+"."
       : "Renseignez d’abord la date de prononcé pour borner la date du délibéré.";
-    remiseInfo.textContent = remise ? "Date de remise de la rédaction, calculée automatiquement (J-7) : "+planningDateLabel(remise)+"." : "";
+    remiseInfo.textContent = remise ? "Date de remise de la rédaction, calculée automatiquement (J-10) : "+planningDateLabel(remise)+"." : "";
   }
   prononceIn.addEventListener("change", updateComputed);
   updateComputed();
@@ -12142,7 +12143,7 @@ function openSysadminDeliberationForm(planningEntryId, existingId, reRenderScree
     if(!delibereIn.value) return "Renseignez la date du délibéré.";
     if(delibereIn.value < rec.date) return "La date du délibéré ne peut pas être antérieure à celle du BJ.";
     var remise = deliberationRemiseDate({datePrononce:prononceIn.value});
-    if(remise && delibereIn.value > remise) return "La date du délibéré doit être antérieure à la date de remise (prononcé − 7 jours).";
+    if(remise && delibereIn.value > remise) return "La date du délibéré doit être antérieure à la date de remise (prononcé − 10 jours).";
     return null;
   }
 
@@ -12214,7 +12215,7 @@ function openSysadminDeliberationEntryDetail(deliberationId, reRenderScreen){
     ["Date du BJ", rec ? planningDateLabel(rec.date) : "—"],
     ["Date du délibéré", planningDateLabel(d.dateDelibere)],
     ["Date de prononcé", planningDateLabel(d.datePrononce)],
-    ["Date de remise (J-7)", planningDateLabel(deliberationRemiseDate(d))],
+    ["Date de remise (J-10)", planningDateLabel(deliberationRemiseDate(d))],
     ["Rédacteur", redacteur ? memberDisplayName(redacteur) : "(conseiller supprimé)"],
     ["Statut", d.remis ? "Remis"+(d.remisAt ? " le "+new Date(d.remisAt).toLocaleDateString("fr-FR") : "") : "À faire"]
   ].forEach(function(r){
