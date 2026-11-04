@@ -1618,7 +1618,14 @@ function migrate(parsed){
           rg: v && v.rg ? String(v.rg) : "",
           notes: v && v.notes ? String(v.notes) : "",
           depFrom: v && (v.depFrom==="domicile"||v.depFrom==="entreprise"||v.depFrom==="sans_objet") ? v.depFrom : "",
-          depTo: v && (v.depTo==="domicile"||v.depTo==="entreprise"||v.depTo==="sans_objet") ? v.depTo : ""
+          depTo: v && (v.depTo==="domicile"||v.depTo==="entreprise"||v.depTo==="sans_objet") ? v.depTo : "",
+          /* Frais annexes (parking, péage...) — demande de l'utilisateur :
+             un simple montant déclaratif par vacation, jamais de pièce
+             jointe dans l'application (les justificatifs papier originaux
+             restent gérés par le conseiller lui-même, en dehors de l'app,
+             au moment de la remise de son RITA au greffe — voir
+             sanitizeFraisAnnexes). */
+          fraisAnnexes: sanitizeFraisAnnexes(v && v.fraisAnnexes)
         };
       });
     }
@@ -8234,6 +8241,42 @@ function hmToMin(s){
   var m = s.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
   return m ? (Number(m[1])*60+Number(m[2])) : null;
 }
+/* Frais annexes (parking, péage...) déclarés sur une vacation — demande de
+   l'utilisateur : « prévoir la possibilité sur une saisie de vacation de
+   noter un montant de frais annexes. Il appartiendra alors au conseiller
+   de joindre manuellement ses justificatifs en dehors de l'application. »
+   Volontairement minimal : un seul montant global par vacation (pas de
+   ventilation par nature de frais, pas de pièce jointe) — le champ "Notes"
+   déjà existant sur la vacation reste l'endroit pour en préciser le détail
+   ("parking + péage A9") si le conseiller le souhaite. Stocké en euros,
+   jusqu'au centime (2 décimales), jamais négatif ; toute valeur invalide
+   ou absente redevient 0 plutôt que de faire échouer tout l'enregistrement
+   (même logique défensive que les autres champs de migrate()). */
+function sanitizeFraisAnnexes(raw){
+  var n = typeof raw==="number" ? raw : parseFloat(raw);
+  if(!isFinite(n) || n<0) return 0;
+  return Math.round(n*100)/100;
+}
+/* Accepte aussi bien "12,50" (saisie française) que "12.50" — même
+   tolérance que sanitizeFraisAnnexes, mais utilisée pour valider la
+   saisie en direct dans le formulaire (voir openVacationForm) : retourne
+   null plutôt que 0 quand le texte est vide ou invalide, pour distinguer
+   « rien saisi » (champ facultatif, donc valide) de « saisie incorrecte »
+   (doit bloquer l’enregistrement). */
+function parseFraisAnnexesInput(raw){
+  var s = String(raw==null ? "" : raw).trim();
+  if(!s) return 0;
+  s = s.replace(",", ".");
+  if(!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  var n = parseFloat(s);
+  return isFinite(n) && n>=0 ? Math.round(n*100)/100 : null;
+}
+/* Affichage "12,50 €" (toujours deux décimales, virgule française) — seul
+   endroit qui formate un montant en euros dans l’application (les frais
+   annexes sont, à ce jour, la seule donnée monétaire saisie). */
+function formatEuros(n){
+  return (Number(n)||0).toFixed(2).replace(".", ",")+" €";
+}
 function vacationSplit(v){
   var s = hmToMin(v.actStart), e = hmToMin(v.actEnd);
   if(s===null || e===null || e<=s) return { inWork:null, outWork:null };
@@ -8277,7 +8320,13 @@ function profileHeaderLines(p){
    - la mention "ne travaillait pas ce jour-là" si la case a été cochée ;
    - l'horaire de travail du jour s'il diffère de l'horaire habituel ;
    - un rappel d'autorisation lorsque la nature de la vacation l'exige
-     (dépassement de temps de rédaction, ou étude de dossier avant délibéré). */
+     (dépassement de temps de rédaction, ou étude de dossier avant délibéré) ;
+   - le montant des frais annexes déclarés (parking, péage...), le cas
+     échéant — c'est ici, plutôt que dans une colonne dédiée, qu'il
+     apparaît sur le relevé imprimé/image (voir buildVacationsCanvases/
+     printVacations), pour ne pas rajouter de colonne à un tableau déjà
+     dense ; le conseiller joint lui-même le justificatif papier d'origine
+     en dehors de l'application au moment de la remise. */
 function vacationNotesDisplay(v){
   var parts = [];
   var p = state.profile;
@@ -8293,6 +8342,7 @@ function vacationNotesDisplay(v){
   if(n && (n.requiresAuthorizationNote || (n.redactionCapMinutes!=null && v.minutes>n.redactionCapMinutes))){
     parts.push("Conseiller(e) informé(e) de la nécessité de produire une autorisation");
   }
+  if(v.fraisAnnexes>0) parts.push("Frais annexes : "+formatEuros(v.fraisAnnexes));
   return parts.join(" · ");
 }
 
@@ -8342,7 +8392,7 @@ function makeTimeField(labelText, initialHHMM, onChange){
 
 function openVacationForm(existing){
   var isEdit = !!existing;
-  var draft = existing ? Object.assign({}, existing) : { id:uid(), date:todayISO(), nature:"audience-bj", actStart:"", actEnd:"", workStart:"", workEnd:"", noWorkDay:false, section:state.profile.section||"", rg:"", notes:"", depFrom:"domicile", depTo:"domicile" };
+  var draft = existing ? Object.assign({}, existing) : { id:uid(), date:todayISO(), nature:"audience-bj", actStart:"", actEnd:"", workStart:"", workEnd:"", noWorkDay:false, section:state.profile.section||"", rg:"", notes:"", depFrom:"domicile", depTo:"domicile", fraisAnnexes:0 };
   if(!draft.depFrom) draft.depFrom = "domicile";
   if(!draft.depTo) draft.depTo = "domicile";
 
@@ -8493,6 +8543,18 @@ function openVacationForm(existing){
   var notesIn = h("textarea", null, draft.notes || "");
   form.appendChild(notesIn);
 
+  /* Frais annexes (parking, péage...) — demande de l'utilisateur : un
+     simple montant déclaratif, pas de pièce jointe dans l'application.
+     Saisie en texte libre (plutôt que type="number") pour accepter aussi
+     bien la virgule française que le point — voir parseFraisAnnexesInput,
+     validé au moment d'enregistrer comme tout le reste du formulaire. */
+  form.appendChild(h("label", {class:"field-label", style:"margin-top:14px"}, "Frais annexes (optionnel)"));
+  var fraisIn = h("input", {type:"text", inputmode:"decimal", placeholder:"0,00",
+    value: draft.fraisAnnexes ? draft.fraisAnnexes.toFixed(2).replace(".", ",") : ""});
+  form.appendChild(fraisIn);
+  form.appendChild(h("div", {class:"footnote", style:"margin-top:6px"},
+    "Montant total des frais annexes engagés pour cette vacation (parking, péage…). Il vous appartient de joindre vos justificatifs originaux en dehors de l’application, au moment de la remise de votre RITA."));
+
   function updateConditionalFields(){
     var n = NATURES.filter(function(x){ return x.id===natureSel.value; })[0];
     hint.textContent = n && n.hint ? n.hint : "";
@@ -8556,6 +8618,12 @@ function openVacationForm(existing){
       notesIn.focus();
       return;
     }
+    var fraisAnnexes = parseFraisAnnexesInput(fraisIn.value);
+    if(fraisAnnexes===null){
+      toast("Montant de frais annexes invalide — utilisez par exemple « 12,50 ».");
+      fraisIn.focus();
+      return;
+    }
     var entry = {
       id:draft.id, date:dateInput.value||todayISO(), nature:natureSel.value,
       actStart:actStartF.getHHMM(), actEnd:actEndF.getHHMM(),
@@ -8563,7 +8631,7 @@ function openVacationForm(existing){
       workEnd: (state.profile.remunere===true && !noWorkDay) ? workEndF.getHHMM() : "",
       noWorkDay: noWorkDay,
       minutes:e-s, section:sectionSel.value, rg:rgIn.value.trim(), notes:notesIn.value.trim(),
-      depFrom: depFromSel.value, depTo: depToSel.value
+      depFrom: depFromSel.value, depTo: depToSel.value, fraisAnnexes: fraisAnnexes
     };
     if(isEdit){
       state.vacations = state.vacations.map(function(v){ return v.id===entry.id ? entry : v; });
@@ -8590,6 +8658,7 @@ function openVacationForm(existing){
 renderers.vacations = function(root){
   var entries = state.vacations.filter(function(v){ return monthKey(v.date)===vacViewMonth; }).sort(function(a,b){ return a.date<b.date?-1:1; });
   var total = entries.reduce(function(s,v){ return s+v.minutes; }, 0);
+  var fraisTotal = entries.reduce(function(s,v){ return s+(v.fraisAnnexes||0); }, 0);
 
   root.appendChild(h("p", {class:"lede"}, "Enregistrez vos vacations au fil de l’eau. En fin de mois, générez le relevé prêt à transmettre au greffe."));
 
@@ -8606,10 +8675,17 @@ renderers.vacations = function(root){
   );
   root.appendChild(nav);
 
-  root.appendChild(h("div", {class:"stat-row", style:"margin-bottom:16px"},
+  var statBoxes = [
     h("div", {class:"stat-box"}, h("div", {class:"n"}, String(entries.length)), h("div", {class:"l"}, "Vacations")),
     h("div", {class:"stat-box"}, h("div", {class:"n"}, minutesLabel(total)), h("div", {class:"l"}, "Total du mois"))
-  ));
+  ];
+  /* Boîte "Frais annexes" n'apparaît que s'il y a effectivement un montant
+     ce mois-ci — éviter d'afficher "0,00 €" tous les mois pour qui ne
+     déclare jamais de frais annexes. */
+  if(fraisTotal>0){
+    statBoxes.push(h("div", {class:"stat-box"}, h("div", {class:"n"}, formatEuros(fraisTotal)), h("div", {class:"l"}, "Frais annexes")));
+  }
+  root.appendChild(h("div", {class:"stat-row", style:"margin-bottom:16px"}, statBoxes));
 
   var panel = h("div", {class:"panel"});
   if(entries.length===0){
@@ -8619,13 +8695,14 @@ renderers.vacations = function(root){
       panel.appendChild(h("div", {class:"row-click", onclick:function(){ openVacationForm(v); }},
         h("div", {class:"rc-main"},
           h("div", {class:"rc-title"}, natureLabel(v.nature)),
-          h("div", {class:"rc-sub"}, parseISODate(v.date).toLocaleDateString("fr-FR", {weekday:"short", day:"numeric", month:"short"}) + (v.actStart && v.actEnd ? " · "+v.actStart+"–"+v.actEnd : "") + (v.section ? " · "+v.section : "") + (v.rg ? " · RG "+v.rg : "") + (v.notes ? " · "+v.notes : ""))
+          h("div", {class:"rc-sub"}, parseISODate(v.date).toLocaleDateString("fr-FR", {weekday:"short", day:"numeric", month:"short"}) + (v.actStart && v.actEnd ? " · "+v.actStart+"–"+v.actEnd : "") + (v.section ? " · "+v.section : "") + (v.rg ? " · RG "+v.rg : "") + (v.notes ? " · "+v.notes : "") + (v.fraisAnnexes>0 ? " · Frais : "+formatEuros(v.fraisAnnexes) : ""))
         ),
         h("div", {class:"rc-val"}, minutesLabel(v.minutes))
       ));
     });
   }
   root.appendChild(panel);
+
 
   /* Revue UI : "+ Ajouter une vacation" est l'action la plus fréquente
      de tout l'écran (au quotidien), mais ressortait moins fort que
@@ -8705,6 +8782,7 @@ function buildVacationsCanvases(mKey, entries, total, signatureImg){
   var cphDisp = cphLabel(state.profile);
   var subTxt = (fullName(state.profile)||"Conseiller(ère) prud’homal(e)") + (cphDisp ? " · CPH de "+cphDisp : "") + (state.profile.section ? " · Section "+state.profile.section : "");
   var infoTxt = profileHeaderLines(state.profile).join(" · ");
+  var fraisTotal = entries.reduce(function(s,v){ return s+(v.fraisAnnexes||0); }, 0);
   var sans = "-apple-system,'Segoe UI',Roboto,Arial,sans-serif";
   var validationNow = new Date();
   var validationTxt = "RITA validée le "+validationNow.toLocaleDateString("fr-FR")+" à "+validationNow.toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit"})+" par le Conseiller. Toute fausse déclaration peut donner lieu à saisine des instances disciplinaires.";
@@ -8731,7 +8809,7 @@ function buildVacationsCanvases(mKey, entries, total, signatureImg){
   var infoLines = infoTxt ? wrapCanvasText(measureCtx, infoTxt, contentW, 2) : [];
 
   var sigMaxW = 200, sigMaxH = 64, sigReserve = signatureImg ? sigMaxH+24 : 0;
-  var headerBlockH = 68 + (infoLines.length ? 22+infoLines.length*20 : 0), footerBlockH = 150+sigReserve, tableHeaderRowH = 46;
+  var headerBlockH = 68 + (infoLines.length ? 22+infoLines.length*20 : 0), footerBlockH = 150+sigReserve+(fraisTotal>0?22:0), tableHeaderRowH = 46;
   var availH = A4_IMG_H - margin*2 - headerBlockH - footerBlockH;
 
   var rowH = 34, maxLines = 2;
@@ -8834,6 +8912,10 @@ function buildVacationsCanvases(mKey, entries, total, signatureImg){
       ctx.font = "700 16px "+sans;
       ctx.fillText("Total du mois : "+minutesLabel(total)+" — "+entries.length+" vacation(s).", margin, fy);
       fy += 22;
+      if(fraisTotal>0){
+        ctx.fillText("Frais annexes déclarés pour le mois : "+formatEuros(fraisTotal)+" — justificatifs à joindre par le conseiller.", margin, fy);
+        fy += 22;
+      }
     }
     ctx.fillStyle = "#777";
     ctx.font = "400 11px "+sans;
@@ -8952,6 +9034,7 @@ function printVacations(mKey, entries, total){
   var titleTxt = "Relevé de vacations — "+monthLabel(mKey);
   var subTxt = (fullName(state.profile)||"Conseiller(ère) prud’homal(e)") + (cphDisp ? " · CPH de "+cphDisp : "") + (state.profile.section ? " · Section "+state.profile.section : "");
   var infoTxt = profileHeaderLines(state.profile).join(" · ");
+  var fraisTotal = entries.reduce(function(s,v){ return s+(v.fraisAnnexes||0); }, 0);
   var rowsHtml = entries.map(function(v){
     var split = vacationSplit(v);
     return "<tr>"
@@ -8994,6 +9077,7 @@ function printVacations(mKey, entries, total){
     + "<table><thead><tr><th>Date</th><th>Nature</th><th>Début</th><th>Fin</th><th>Durée</th><th>Temps de travail</th><th>Hors temps de travail</th><th>Aller</th><th>Retour</th><th>RG</th><th>Notes</th></tr></thead>"
     + "<tbody>"+rowsHtml+"</tbody></table>"
     + "<p class=\"total\">Total du mois : "+escapeHtml(minutesLabel(total))+" — "+entries.length+" vacation(s).</p>"
+    + (fraisTotal>0 ? "<p class=\"total\">Frais annexes déclarés pour le mois : "+escapeHtml(formatEuros(fraisTotal))+" — justificatifs à joindre par le conseiller.</p>" : "")
     + "<p class=\"disclaimer\">Aller / Retour : D = Domicile, E = Entreprise.</p>"
     + "<p class=\"disclaimer\">Document généré le "+escapeHtml(new Date().toLocaleDateString("fr-FR"))+" — à vérifier avant transmission au greffe. Les durées indemnisables sont fixées par le Code du travail ; consultez le texte en vigueur pour toute question de plafond.</p>"
     + (state.profile.signature ? "<div class=\"signature-block\"><p>Signature du conseiller :</p><img src=\""+state.profile.signature+"\" alt=\"Signature\"></div>" : "")
@@ -9018,10 +9102,11 @@ function printVacations(mKey, entries, total){
 }
 
 function exportVacationsCSV(mKey, entries){
-  var lines = ["Date;Nature;Debut;Fin;Duree (min);Section;RG;Notes"];
+  var lines = ["Date;Nature;Debut;Fin;Duree (min);Section;RG;Frais annexes (EUR);Notes"];
   entries.forEach(function(v){
     var notes = vacationNotesDisplay(v).replace(/;/g,",").replace(/[\r\n]+/g," ");
-    var row = [v.date, natureLabel(v.nature), v.actStart||"", v.actEnd||"", String(v.minutes), v.section||"", v.rg||"", notes];
+    var frais = (v.fraisAnnexes||0).toFixed(2).replace(".", ",");
+    var row = [v.date, natureLabel(v.nature), v.actStart||"", v.actEnd||"", String(v.minutes), v.section||"", v.rg||"", frais, notes];
     lines.push(row.join(";"));
   });
   var csv = "\uFEFF"+lines.join("\r\n");
