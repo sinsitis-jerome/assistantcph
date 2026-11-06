@@ -8656,7 +8656,17 @@ function openVacationForm(existing){
 }
 
 renderers.vacations = function(root){
-  var entries = state.vacations.filter(function(v){ return monthKey(v.date)===vacViewMonth; }).sort(function(a,b){ return a.date<b.date?-1:1; });
+  /* Tri chronologique strict : d'abord par date, puis par heure de début
+     de vacation (actStart, format "HH:MM" — comparable tel quel en texte)
+     pour départager plusieurs vacations saisies le même jour, plutôt que
+     l'ordre de saisie (demande de l'utilisateur). actStart est toujours
+     renseigné (champ obligatoire dans openVacationForm, quelle que soit la
+     nature) ; la valeur par défaut "" ne sert donc que de garde-fou. */
+  var entries = state.vacations.filter(function(v){ return monthKey(v.date)===vacViewMonth; }).sort(function(a,b){
+    if(a.date!==b.date) return a.date<b.date ? -1 : 1;
+    var sa = a.actStart||"", sb = b.actStart||"";
+    return sa<sb ? -1 : (sa>sb ? 1 : 0);
+  });
   var total = entries.reduce(function(s,v){ return s+v.minutes; }, 0);
   var fraisTotal = entries.reduce(function(s,v){ return s+(v.fraisAnnexes||0); }, 0);
 
