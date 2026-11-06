@@ -8819,12 +8819,18 @@ function buildVacationsCanvases(mKey, entries, total, signatureImg){
   var infoLines = infoTxt ? wrapCanvasText(measureCtx, infoTxt, contentW, 2) : [];
 
   var sigMaxW = 200, sigMaxH = 64, sigReserve = signatureImg ? sigMaxH+24 : 0;
-  var headerBlockH = 68 + (infoLines.length ? 22+infoLines.length*20 : 0), footerBlockH = 150+sigReserve+(fraisTotal>0?22:0), tableHeaderRowH = 46;
+  var headerBlockH = 68 + (infoLines.length ? 22+infoLines.length*20 : 0), footerBlockH = 150+sigReserve+(fraisTotal>0?22:0), tableHeaderRowH = 50;
   var availH = A4_IMG_H - margin*2 - headerBlockH - footerBlockH;
 
-  var rowH = 34, maxLines = 2;
+  /* Taille de police du tableau agrandie (demande du greffe : les
+     vacations imprimées étaient trop petites à lire). Si le mois compte
+     trop de vacations pour tenir en une page à cette taille confortable,
+     on réduit d'abord à une taille encore lisible (rowH=28, 1 ligne par
+     entrée) avant de recourir à la pagination (perPage/pageCount
+     ci-dessous), qui reste le filet de sécurité final. */
+  var rowH = 38, maxLines = 2;
   if(Math.floor((availH-tableHeaderRowH)/rowH) < Math.max(entries.length,1)){
-    rowH = 24; maxLines = 1;
+    rowH = 28; maxLines = 1;
   }
   var perPage = Math.max(1, Math.floor((availH-tableHeaderRowH)/rowH));
   var pageCount = Math.max(1, Math.ceil((entries.length||1)/perPage));
@@ -8863,7 +8869,7 @@ function buildVacationsCanvases(mKey, entries, total, signatureImg){
     ctx.strokeStyle = "#999"; ctx.lineWidth = 1;
     ctx.strokeRect(tx, ty, contentW, tableHeaderRowH);
     ctx.fillStyle = "#1C2024";
-    ctx.font = "700 14px "+sans;
+    ctx.font = "700 16px "+sans;
     var cx = tx;
     cols.forEach(function(c){
       var hLines = wrapCanvasText(ctx, c.label, c.w-16, 2);
@@ -8873,7 +8879,7 @@ function buildVacationsCanvases(mKey, entries, total, signatureImg){
     });
 
     var ry = ty + tableHeaderRowH;
-    ctx.font = (maxLines===2 ? "400 14px " : "400 13px ")+sans;
+    ctx.font = (maxLines===2 ? "400 16px " : "400 15px ")+sans;
     pageEntries.forEach(function(v, idx){
       if(idx % 2 === 1){ ctx.fillStyle = "#FAF9F6"; ctx.fillRect(tx, ry, contentW, rowH); }
       ctx.fillStyle = "#26292D";
